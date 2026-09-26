@@ -1,9 +1,11 @@
 """Generate grafana/mirror-trends.dashboard.json (import via Grafana > Dashboards > New > Import).
 
-Data model (Home Assistant InfluxDB integration, `measurement_attr: entity_id`):
-measurement = full entity_id, numeric state in field "value", string attributes as "<attr>_str".
-Entity IDs come from grafana/entities.json (yours, gitignored; start from entities.example.json);
-queries reference them as @role@ placeholders.
+Data model (Home Assistant InfluxDB integration, default schema): measurement = the entity's
+unit_of_measurement (or the configured default_measurement when it has none), tag entity_id =
+object_id, numeric state in field "value", string attributes as "<attr>_str".
+Entities come from grafana/entities.json (yours, gitignored; start from entities.example.json):
+{"role": {"entity_id": "sensor.x", "measurement": "<unit>"}}. Queries use FROM "@role@" WHERE ...,
+which is rewritten to FROM "<unit>" WHERE "entity_id" = '<object_id>' AND ...
 Layout targets a portrait 1080x1920 mirror: ~44 grid rows fill the area below the clock.
 """
 import json
@@ -175,12 +177,27 @@ here = Path(__file__).parent
 entities_file = here / "entities.json"
 if not entities_file.exists():
     sys.exit("grafana/entities.json not found: copy entities.example.json and set your entity IDs")
-text = json.dumps(dashboard, indent=2)
-for role, entity_id in json.loads(entities_file.read_text(encoding="utf-8")).items():
-    text = text.replace(f"@{role}@", entity_id)
-missing = sorted(set(re.findall(r"@([a-z0-9_]+)@", text)))
-if missing:
-    sys.exit(f"entities.json is missing roles: {', '.join(missing)}")
+entities = json.loads(entities_file.read_text(encoding="utf-8"))
+
+
+def resolve(query):
+    """FROM "@role@" WHERE ...  ->  FROM "<unit>" WHERE "entity_id" = '<object_id>' AND ..."""
+    def sub(m):
+        role = m.group(1)
+        if role not in entities:
+            sys.exit(f"entities.json is missing role: {role}")
+        e = entities[role]
+        obj = e["entity_id"].split(".", 1)[1]
+        return f'FROM "{e["measurement"]}" WHERE "entity_id" = \'{obj}\' AND '
+    out_q = re.sub(r'FROM "@([a-z0-9_]+)@" WHERE ', sub, query)
+    if "@" in out_q:
+        sys.exit(f"unresolved placeholder in query: {out_q}")
+    return out_q
+
+
+for p in panels:
+    for t in p["targets"]:
+        t["query"] = resolve(t["query"])
 out = here / "mirror-trends.dashboard.json"
-out.write_text(text + "\n", encoding="utf-8")
+out.write_text(json.dumps(dashboard, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 print(f"wrote {out.name}: {len(panels)} panels, {max(p['gridPos']['y'] + p['gridPos']['h'] for p in panels)} grid rows")

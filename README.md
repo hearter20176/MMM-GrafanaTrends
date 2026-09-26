@@ -6,7 +6,7 @@ The module embeds the whole dashboard in one iframe rather than one iframe per p
 
 ## Dashboard
 
-`grafana/build_dashboard.py` generates `grafana/mirror-trends.dashboard.json` from your entity IDs in `grafana/entities.json` (copy `grafana/entities.example.json` and edit it; both the entity map and the generated JSON are gitignored). It reads the Home Assistant InfluxDB integration (InfluxDB 1.x, InfluxQL) configured with `measurement_attr: entity_id`, so each measurement is a full entity_id with the numeric state in field `value`.
+`grafana/build_dashboard.py` generates `grafana/mirror-trends.dashboard.json` from your entity IDs in `grafana/entities.json` (copy `grafana/entities.example.json` and edit it; both the entity map and the generated JSON are gitignored). It reads the Home Assistant InfluxDB integration (InfluxDB 1.x, InfluxQL) with its default schema: the measurement is the entity's unit of measurement (or the configured `default_measurement` when it has none), the `entity_id` tag holds the object id, and the numeric state is in field `value`. Each entry in `entities.json` gives the entity ID and its measurement.
 
 | Panel | Range | Source |
 |---|---|---|

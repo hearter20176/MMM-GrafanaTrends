@@ -1,23 +1,86 @@
 {
-  "water_today": "sensor.flo_water_valve_today_s_water_usage",
-  "water_flow_rate": "sensor.flo_water_valve_water_flow_rate",
-  "water_pressure": "sensor.flo_water_valve_water_pressure",
-  "zone1_temperature": "sensor.family_room_temperature",
-  "zone2_temperature": "sensor.master_bedroom_temperature",
-  "outdoor_temperature": "sensor.weather_station_temperature",
-  "zone1_humidity": "sensor.family_room_humidity",
-  "zone2_humidity": "sensor.master_bedroom_humidity",
-  "zone1_hvac_runtime_today": "sensor.hvac_family_room_runtime_today",
-  "zone2_hvac_runtime_today": "sensor.hvac_master_bedroom_runtime_today",
-  "radon": "sensor.radon_level",
-  "ev_energy_today": "sensor.ev_energy_today",
-  "ev_cost_today": "sensor.ev_charging_cost_today",
-  "fridge_temperature": "sensor.refrigerator_fridge_temperature",
-  "freezer_temperature": "sensor.refrigerator_freezer_temperature",
-  "rain_today": "sensor.weather_station_daily_rain",
-  "pihole_percent_blocked": "sensor.pi_hole_ads_percentage_blocked",
-  "wan_download_kibps": "sensor.gateway_download_speed",
-  "wan_upload_kibps": "sensor.gateway_upload_speed",
-  "devices_offline": "sensor.devices_offline",
-  "devices_low_battery": "sensor.devices_low_battery"
+  "water_today": {
+    "entity_id": "sensor.flo_water_valve_today_s_water_usage",
+    "measurement": "gal"
+  },
+  "water_flow_rate": {
+    "entity_id": "sensor.flo_water_valve_water_flow_rate",
+    "measurement": "gal/min"
+  },
+  "water_pressure": {
+    "entity_id": "sensor.flo_water_valve_water_pressure",
+    "measurement": "psi"
+  },
+  "zone1_temperature": {
+    "entity_id": "sensor.family_room_temperature",
+    "measurement": "°F"
+  },
+  "zone2_temperature": {
+    "entity_id": "sensor.master_bedroom_temperature",
+    "measurement": "°F"
+  },
+  "outdoor_temperature": {
+    "entity_id": "sensor.weather_station_temperature",
+    "measurement": "°F"
+  },
+  "zone1_humidity": {
+    "entity_id": "sensor.family_room_humidity",
+    "measurement": "%"
+  },
+  "zone2_humidity": {
+    "entity_id": "sensor.master_bedroom_humidity",
+    "measurement": "%"
+  },
+  "zone1_hvac_runtime_today": {
+    "entity_id": "sensor.hvac_family_room_runtime_today",
+    "measurement": "h"
+  },
+  "zone2_hvac_runtime_today": {
+    "entity_id": "sensor.hvac_master_bedroom_runtime_today",
+    "measurement": "h"
+  },
+  "radon": {
+    "entity_id": "sensor.radon_level",
+    "measurement": "pCi/L"
+  },
+  "ev_energy_today": {
+    "entity_id": "sensor.ev_energy_today",
+    "measurement": "kWh"
+  },
+  "ev_cost_today": {
+    "entity_id": "sensor.ev_charging_cost_today",
+    "measurement": "$"
+  },
+  "fridge_temperature": {
+    "entity_id": "sensor.refrigerator_fridge_temperature",
+    "measurement": "°F"
+  },
+  "freezer_temperature": {
+    "entity_id": "sensor.refrigerator_freezer_temperature",
+    "measurement": "°F"
+  },
+  "rain_today": {
+    "entity_id": "sensor.weather_station_daily_rain",
+    "measurement": "in"
+  },
+  "pihole_percent_blocked": {
+    "entity_id": "sensor.pi_hole_ads_percentage_blocked",
+    "measurement": "%"
+  },
+  "wan_download_kibps": {
+    "entity_id": "sensor.gateway_download_speed",
+    "measurement": "KiB/s"
+  },
+  "wan_upload_kibps": {
+    "entity_id": "sensor.gateway_upload_speed",
+    "measurement": "KiB/s"
+  },
+  "devices_offline": {
+    "entity_id": "sensor.devices_offline",
+    "measurement": "devices"
+  },
+  "devices_low_battery": {
+    "entity_id": "sensor.devices_low_battery",
+    "measurement": "devices"
+  }
 }
