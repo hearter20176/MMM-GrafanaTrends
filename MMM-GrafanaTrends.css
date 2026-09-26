@@ -1,0 +1,44 @@
+/* MMM-GrafanaTrends: glass card around a single Grafana dashboard iframe */
+
+.grafana-trends-wrapper {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+.grafana-trends-card {
+  position: relative;
+  box-sizing: border-box;
+  width: calc(100vw - 36px);
+  max-width: 1040px;
+  padding: 10px;
+  border-radius: 24px;
+  border: 1px solid rgb(255 255 255 / 14%);
+  background: rgb(10 15 30 / 55%);
+  box-shadow: 0 18px 45px rgb(0 0 0 / 45%);
+  backdrop-filter: blur(22px);
+  overflow: hidden;
+}
+
+.grafana-trends-header {
+  margin: 4px 8px 8px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgb(255 255 255 / 55%);
+  text-align: left;
+}
+
+.grafana-trends-frame {
+  display: block;
+  border: 0;
+  border-radius: 16px;
+  background: transparent;
+}
+
+.grafana-trends-message {
+  padding: 24px;
+  font-size: 0.85rem;
+  color: rgb(255 255 255 / 70%);
+}

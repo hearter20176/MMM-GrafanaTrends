@@ -1,0 +1,5 @@
+node_modules/
+__pycache__/
+# Your own entity IDs and the dashboard generated from them
+grafana/entities.json
+grafana/mirror-trends.dashboard.json

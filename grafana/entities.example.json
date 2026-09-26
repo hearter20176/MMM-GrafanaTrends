@@ -1,0 +1,23 @@
+{
+  "water_today": "sensor.flo_water_valve_today_s_water_usage",
+  "water_flow_rate": "sensor.flo_water_valve_water_flow_rate",
+  "water_pressure": "sensor.flo_water_valve_water_pressure",
+  "zone1_temperature": "sensor.family_room_temperature",
+  "zone2_temperature": "sensor.master_bedroom_temperature",
+  "outdoor_temperature": "sensor.weather_station_temperature",
+  "zone1_humidity": "sensor.family_room_humidity",
+  "zone2_humidity": "sensor.master_bedroom_humidity",
+  "zone1_hvac_runtime_today": "sensor.hvac_family_room_runtime_today",
+  "zone2_hvac_runtime_today": "sensor.hvac_master_bedroom_runtime_today",
+  "radon": "sensor.radon_level",
+  "ev_energy_today": "sensor.ev_energy_today",
+  "ev_cost_today": "sensor.ev_charging_cost_today",
+  "fridge_temperature": "sensor.refrigerator_fridge_temperature",
+  "freezer_temperature": "sensor.refrigerator_freezer_temperature",
+  "rain_today": "sensor.weather_station_daily_rain",
+  "pihole_percent_blocked": "sensor.pi_hole_ads_percentage_blocked",
+  "wan_download_kibps": "sensor.gateway_download_speed",
+  "wan_upload_kibps": "sensor.gateway_upload_speed",
+  "devices_offline": "sensor.devices_offline",
+  "devices_low_battery": "sensor.devices_low_battery"
+}
