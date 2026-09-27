@@ -20,7 +20,9 @@ pid = 0
 
 
 def q(query, ref="A"):
-    return {"refId": ref, "datasource": DS, "query": query, "rawQuery": True, "resultFormat": "time_series"}
+    # alias $col names series by the AS alias only (otherwise InfluxDB prefixes the measurement, e.g. "°F.Outdoor")
+    return {"refId": ref, "datasource": DS, "query": query, "rawQuery": True, "resultFormat": "time_series",
+            "alias": "$col"}
 
 
 def add(kind, title, gridpos, targets, **extra):
@@ -90,9 +92,9 @@ for i, (title, meas) in enumerate((("Offline", "@devices_offline@"), ("Low batte
     add("stat", title, (i * 12, 4, 12, 3), [q(f'SELECT last("devices_str") FROM "{meas}" WHERE $timeFilter')],
         timeFrom="30d", hideTimeOverride=True,
         fieldConfig={"defaults": {"color": {"mode": "fixed", "fixedColor": "text"}}, "overrides": []},
-        options={"reduceOptions": {"calcs": ["lastNotNull"], "fields": "/.*/", "values": False},
+        options={"reduceOptions": {"calcs": ["lastNotNull"], "fields": "/^(?!Time$).*/", "values": False},
                  "colorMode": "none", "graphMode": "none", "justifyMode": "center", "textMode": "value",
-                 "text": {"valueSize": 15}, "wideLayout": True})
+                 "text": {"valueSize": 14}, "wideLayout": True})
 
 # ── Water ────────────────────────────────────────────────────────────────────
 series("Water use per day (gal)", (0, 7, 12, 8),
