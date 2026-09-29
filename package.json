@@ -1,0 +1,9 @@
+{
+  "name": "MMM-GrafanaTrends",
+  "version": "1.0.0",
+  "description": "Embeds a Grafana dashboard in a glass card for MagicMirror.",
+  "main": "MMM-GrafanaTrends.js",
+  "scripts": {
+    "test": "node --test"
+  }
+}
