@@ -122,3 +122,7 @@ a relative or reverse-proxy URL (e.g. `/grafana/d/x?kiosk`) works instead of the
 kiosk-mode dashboard URLs. VERIFY whether the public/shared-dashboard link's `theme` param is
 honoured on the Grafana version running on the Home Assistant add-on - support for it on public
 dashboards varies by version.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
