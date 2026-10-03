@@ -4,6 +4,15 @@ Shows a Grafana dashboard of home trends on a MagicMirror² page, inside a glass
 
 The module embeds the whole dashboard in one iframe rather than one iframe per panel. Each iframe runs its own copy of the Grafana app, so a single frame is much lighter on a Raspberry Pi.
 
+## Screenshot
+
+<p align="center">
+  <img src="docs/screenshot.png" width="420" alt="Glass card framing a Grafana dashboard in the dark theme"/>
+</p>
+
+*The glass card framing a dashboard in Grafana's dark theme (night mode). For this screenshot the
+card shows Grafana's public "Time series graphs" demo instead of a home dashboard.*
+
 ## Dashboard
 
 `grafana/build_dashboard.py` generates `grafana/mirror-trends.dashboard.json` from your entity IDs in `grafana/entities.json` (copy `grafana/entities.example.json` and edit it; both the entity map and the generated JSON are gitignored). It reads the Home Assistant InfluxDB integration (InfluxDB 1.x, InfluxQL) with its default schema: the measurement is the entity's unit of measurement (or the configured `default_measurement` when it has none), the `entity_id` tag holds the object id, and the numeric state is in field `value`. Each entry in `entities.json` gives the entity ID and its measurement.
@@ -30,7 +39,7 @@ standard library). Clone into your MagicMirror `modules/` folder:
 
 ```
 cd ~/MagicMirror/modules
-git clone <repo-url> MMM-GrafanaTrends
+git clone https://github.com/hearter20176/MMM-GrafanaTrends.git
 ```
 
 ## Grafana requirements
