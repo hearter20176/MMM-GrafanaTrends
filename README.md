@@ -42,6 +42,15 @@ cd ~/MagicMirror/modules
 git clone https://github.com/hearter20176/MMM-GrafanaTrends.git
 ```
 
+## Update
+
+```bash
+cd ~/MagicMirror/modules/MMM-GrafanaTrends
+git pull
+```
+
+Then restart MagicMirror (for example `pm2 restart MagicMirror`).
+
 ## Grafana requirements
 
 - Grafana must be reachable from the mirror, for example the Home Assistant Grafana add-on with its web port mapped (host port 3000). The add-on serves Grafana under its ingress path even on that port (`http://<ha-host>:3000/api/hassio_ingress/<id>/...`); requesting `/` redirects there, so use the full path in `url`.
@@ -63,7 +72,7 @@ page.
     url: "http://<ha-host>:3000/public-dashboards/<access-token>",
     height: 1664
   }
-}
+},
 ```
 
 | Option | Default | Description |

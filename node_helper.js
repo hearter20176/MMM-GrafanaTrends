@@ -8,8 +8,8 @@
  * only the request's origin (protocol + host) is.
  */
 
-const http = require("http");
-const https = require("https");
+const http = require("node:http");
+const https = require("node:https");
 const Log = require("logger");
 const NodeHelper = require("node_helper");
 const { evaluateProbeResponse } = require("./probe-rules");

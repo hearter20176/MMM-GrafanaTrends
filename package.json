@@ -2,8 +2,31 @@
   "name": "MMM-GrafanaTrends",
   "version": "1.0.0",
   "description": "Embeds a Grafana dashboard in a glass card for MagicMirror.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hearter20176/MMM-GrafanaTrends.git"
+  },
+  "homepage": "https://github.com/hearter20176/MMM-GrafanaTrends#readme",
+  "bugs": {
+    "url": "https://github.com/hearter20176/MMM-GrafanaTrends/issues"
+  },
+  "license": "MIT",
+  "author": "hearter20176",
+  "keywords": [
+    "MagicMirror",
+    "grafana",
+    "dashboard",
+    "home-assistant",
+    "trends"
+  ],
   "main": "MMM-GrafanaTrends.js",
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "eslint": "^9.39.5",
+    "globals": "^17.13.0"
   }
 }

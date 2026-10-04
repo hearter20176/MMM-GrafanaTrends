@@ -9,11 +9,11 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("fs");
-const path = require("path");
-const vm = require("vm");
+const fs = require("node:fs");
+const path = require("node:path");
+const vm = require("node:vm");
 const Module = require("module");
-const { EventEmitter } = require("events");
+const { EventEmitter } = require("node:events");
 
 const HELPER_PATH = path.join(__dirname, "..", "node_helper.js");
 
@@ -22,11 +22,14 @@ function loadNodeHelperDefinition({ httpImpl, httpsImpl, logImpl }) {
   const wrapper = Module.wrap(src);
   const script = vm.runInThisContext(wrapper, { filename: HELPER_PATH });
   const fakeModule = { exports: {} };
-  const fakeRequire = (name) => {
+  const fakeRequire = (request) => {
+    // the helper imports built-ins with the node: scheme (node:http); match them by bare name
+    const name = request.replace(/^node:/, "");
     if (name === "node_helper") return { create: (obj) => obj };
     if (name === "logger") return logImpl;
     if (name === "http") return httpImpl;
     if (name === "https") return httpsImpl;
+    if (request.startsWith("node:")) return require(request);
     // Resolve real relative requires (./probe-rules) against the real file.
     return require(path.join(__dirname, "..", name));
   };
