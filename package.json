@@ -1,5 +1,5 @@
 {
-  "name": "MMM-GrafanaTrends",
+  "name": "mmm-grafanatrends",
   "version": "1.0.0",
   "description": "Embeds a Grafana dashboard in a glass card for MagicMirror.",
   "repository": {
@@ -19,6 +19,7 @@
     "home-assistant",
     "trends"
   ],
+  "type": "commonjs",
   "main": "MMM-GrafanaTrends.js",
   "scripts": {
     "test": "node --test",
@@ -27,6 +28,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "eslint": "^10.12.0",
+    "eslint-plugin-package-json": "^1.10.1",
     "globals": "^17.13.0"
   }
 }

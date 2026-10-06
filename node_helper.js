@@ -34,7 +34,7 @@ module.exports = NodeHelper.create({
     let target;
     try {
       target = new URL(url);
-    } catch (err) {
+    } catch {
       this.sendSocketNotification("GRAFANA_TRENDS_PROBE_RESULT", {
         identifier,
         requestId,

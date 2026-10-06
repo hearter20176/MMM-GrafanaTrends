@@ -16,7 +16,7 @@ function parseOrigin(origin) {
     const scheme = u.protocol.toLowerCase();
     const port = u.port || (scheme === "https:" ? "443" : scheme === "http:" ? "80" : "");
     return { scheme, host: u.hostname.toLowerCase(), port };
-  } catch (err) {
+  } catch {
     return null;
   }
 }
