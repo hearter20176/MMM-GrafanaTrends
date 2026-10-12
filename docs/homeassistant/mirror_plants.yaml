@@ -10,9 +10,10 @@
 #   - input_button.<zone>_plant_reservoir_refilled  (x3)
 #   - Alert A, connection lost, per device (3 soil sensors, 3 waterers):
 #       binary_sensor.<zone>_<device>_connection_lost  (raise debounce 15 min, clear debounce 10 min)
-#       alert.* entities: email now, then every 360 min while unresolved, "done" email on recovery
+#       email: a DIGEST of all offline devices on raise and every 6 h (00:00/06:00/12:00/18:00),
+#       plus a "restored" email per device on recovery (notify.send_message, see below)
 #       iPhone time-sensitive push, re-sent every 6 h, cleared with clear_notification on recovery
-#   - Alert B, reservoir likely empty, per zone: email once (+ one resolved email) and the same iPhone push
+#   - Alert B, reservoir likely empty, per zone: email once on raise and once on clear, plus the same iPhone push
 #   - sensor.mirror_plant_alerts : the contract entity the mirror polls (schema 1)
 #
 # Tunable thresholds (the "variables"): the input_number helpers in the first block below.
@@ -25,11 +26,17 @@
 # entities with triggers:). last_reported needs 2024.3 (falls back to last_updated before that).
 #
 # Notify services (the other "variables"):
-#   - Phone: notify.mobile_app_hea_iphone_14_pro_max (automation variable notify_phone)
-#   - Email: notify.email is a PLACEHOLDER. OWNER MUST SET IT in two places:
-#       (1) the `notifiers: [email]` list of every alert: entry (service name WITHOUT the notify. prefix)
-#       (2) the notify_email variable in the automation mirror_plants_reservoir_email
-#     (alert: only accepts a static notifier name, so it cannot read the automation variable.)
+#   - Phone: notify.mobile_app_hea_iphone_14_pro_max (automation variable notify_phone, legacy
+#     mobile_app service; still supported by the Companion app)
+#   - Email: ALL emails are sent by ONE automation (mirror_plants_email) with
+#     action: notify.send_message to a notify ENTITY, set in ONE place: the variable
+#     notify_email_entity in that automation. It ships set to the owner's recipient entity
+#       notify.email_harry_arter_gmail_com
+#     To change it, find the entity id under Settings > Devices & services > SMTP > the recipient
+#     entry (the notify entity it creates). If it is wrong, every email attempt errors in the
+#     automation trace and log. Test it with Developer Tools > Actions > notify.send_message.
+#   - Why not notify.email / alert:? The legacy notify.<name> services (and the alert: integration,
+#     which can only call them) are deprecated by HA and stop working in 2027.3.0.
 #
 # Zone symbols. The mirror owns the glyph table (zones.js) and a test checks these markers
 # against it. Glyphs are written below as YAML \uXXXX escapes so this file stays ASCII.
@@ -53,17 +60,21 @@
 #     day, so a staleness limit would alarm constantly. Before turning staleness on, watch each
 #     waterer's last_reported for a day and set the limit well above what you saw (max 2880 min).
 #   - The Kitchen soil sensor is already "unavailable" in the owner's device dump, so expect a real
-#     Kitchen soil sensor alert about 15 min after install, then email + push every 6 h. Fix the sensor,
+#     Kitchen soil sensor alert about 15 min after install, then an email digest + push every 6 h. Fix the sensor,
 #     or turn ON input_boolean.mirror_plant_alerts_maintenance before install to mute email and push
 #     (the mirror popup and the contract entity still show the alert).
-#   - Maintenance mode mutes email and iPhone push only. Turning it on while an email alert is open
-#     sends that alert's "restored" email once (the email gate sensor drops); turning it off re-raises.
-#   - Phone push cadence is clock-aligned (00:00, 06:00, 12:00, 18:00) plus on raise and at HA start,
-#     not 6 h from the raise. Email cadence (alert:) is 360 min from the raise.
-#   - Template reload (YAML reload of template entities) makes devices go unavailable briefly, which can
-#     send a spurious "restored" email followed by a new raise email 15 min later. Prefer a restart.
-#   - A shared outage (coordinator, Wi-Fi, cloud) takes all devices down at once: expect one email and
-#     one push per device. No combined alert is built, by decision.
+#   - Maintenance mode mutes email and iPhone push only. Nothing is sent while it is on, including
+#     "restored" emails; alerts still open when you turn it off are included in the next 6 h digest.
+#   - Phone push AND email digest cadence is clock-aligned (00:00, 06:00, 12:00, 18:00), plus one
+#     message when an alert is raised. The phone push also re-sends at HA start; the email digest does
+#     not (a restart never sends mail). Not 6 h from the raise.
+#   - Raise emails/pushes for connection alerts are skipped while the startup hold (grace) is on, so a
+#     restart never produces duplicate raise emails. A genuinely new device alert that raises during
+#     that ~17 minute window is picked up by the next 6 h digest.
+#   - Template reload (YAML reload of template entities) makes devices go unavailable briefly. Prefer
+#     a restart.
+#   - A shared outage (coordinator, Wi-Fi, cloud) now gives ONE digest email per raise or 6 h tick,
+#     but still one "restored" email and one recovery push per device.
 #   - Attribute exclusion: see the RECORDER / INFLUXDB note at the end of this file.
 #   - If HA itself is down nothing alerts; only an external watchdog can cover that.
 # =============================================================================
@@ -333,26 +344,6 @@ template:
           since: "{{ (states.input_boolean.kitchen_plant_reservoir_empty.last_changed | as_local).isoformat() }}"
           detail: "Watering stopped with no moisture rise (moisture {{ states('input_number.kitchen_plant_reservoir_flag_moisture') }}% when flagged). Refill, then press Refilled."
 
-      # ---- Email gates: raw connection-lost sensor AND maintenance off. The alert: entities watch these. ----
-      - name: "Family Room soil sensor connection alert email gate"
-        unique_id: mirror_plants_family_room_soil_sensor_connection_alert_email_gate
-        state: "{{ is_state('binary_sensor.family_room_soil_sensor_connection_lost', 'on') and not is_state('input_boolean.mirror_plant_alerts_maintenance', 'on') }}"
-      - name: "Family Room waterer connection alert email gate"
-        unique_id: mirror_plants_family_room_waterer_connection_alert_email_gate
-        state: "{{ is_state('binary_sensor.family_room_waterer_connection_lost', 'on') and not is_state('input_boolean.mirror_plant_alerts_maintenance', 'on') }}"
-      - name: "Dining Room soil sensor connection alert email gate"
-        unique_id: mirror_plants_dining_room_soil_sensor_connection_alert_email_gate
-        state: "{{ is_state('binary_sensor.dining_room_soil_sensor_connection_lost', 'on') and not is_state('input_boolean.mirror_plant_alerts_maintenance', 'on') }}"
-      - name: "Dining Room waterer connection alert email gate"
-        unique_id: mirror_plants_dining_room_waterer_connection_alert_email_gate
-        state: "{{ is_state('binary_sensor.dining_room_waterer_connection_lost', 'on') and not is_state('input_boolean.mirror_plant_alerts_maintenance', 'on') }}"
-      - name: "Kitchen soil sensor connection alert email gate"
-        unique_id: mirror_plants_kitchen_soil_sensor_connection_alert_email_gate
-        state: "{{ is_state('binary_sensor.kitchen_soil_sensor_connection_lost', 'on') and not is_state('input_boolean.mirror_plant_alerts_maintenance', 'on') }}"
-      - name: "Kitchen waterer connection alert email gate"
-        unique_id: mirror_plants_kitchen_waterer_connection_alert_email_gate
-        state: "{{ is_state('binary_sensor.kitchen_waterer_connection_lost', 'on') and not is_state('input_boolean.mirror_plant_alerts_maintenance', 'on') }}"
-
   # ---- Contract entity read by the mirror (design section 2.2, schema 1) ----
   # Trigger-based so the count and the list come from ONE evaluation (the `alerts` variable).
   - triggers:
@@ -427,82 +418,6 @@ template:
         attributes:
           schema: 1
           alerts: "{{ alerts }}"
-
-# ---- Email cadence for Alert A: HA alert integration, every 360 min while unresolved ----
-# notifiers: [email] means service notify.email. OWNER: change `email` to your notifier name.
-alert:
-  family_room_soil_sensor_connection_lost:
-    name: "Family Room soil sensor connection lost"
-    entity_id: binary_sensor.family_room_soil_sensor_connection_alert_email_gate
-    state: "on"
-    repeat: 360
-    skip_first: false
-    can_acknowledge: true
-    notifiers:
-      - email
-    title: "Plant alert: Family Room soil sensor offline"
-    message: "Family Room soil sensor has lost connection ({{ state_attr('binary_sensor.family_room_soil_sensor_connection_lost', 'detail') }}). Still unresolved; this email repeats every 6 hours."
-    done_message: "Family Room soil sensor connection restored."
-  family_room_waterer_connection_lost:
-    name: "Family Room waterer connection lost"
-    entity_id: binary_sensor.family_room_waterer_connection_alert_email_gate
-    state: "on"
-    repeat: 360
-    skip_first: false
-    can_acknowledge: true
-    notifiers:
-      - email
-    title: "Plant alert: Family Room waterer offline"
-    message: "Family Room waterer has lost connection ({{ state_attr('binary_sensor.family_room_waterer_connection_lost', 'detail') }}). Still unresolved; this email repeats every 6 hours."
-    done_message: "Family Room waterer connection restored."
-  dining_room_soil_sensor_connection_lost:
-    name: "Dining Room soil sensor connection lost"
-    entity_id: binary_sensor.dining_room_soil_sensor_connection_alert_email_gate
-    state: "on"
-    repeat: 360
-    skip_first: false
-    can_acknowledge: true
-    notifiers:
-      - email
-    title: "Plant alert: Dining Room soil sensor offline"
-    message: "Dining Room soil sensor has lost connection ({{ state_attr('binary_sensor.dining_room_soil_sensor_connection_lost', 'detail') }}). Still unresolved; this email repeats every 6 hours."
-    done_message: "Dining Room soil sensor connection restored."
-  dining_room_waterer_connection_lost:
-    name: "Dining Room waterer connection lost"
-    entity_id: binary_sensor.dining_room_waterer_connection_alert_email_gate
-    state: "on"
-    repeat: 360
-    skip_first: false
-    can_acknowledge: true
-    notifiers:
-      - email
-    title: "Plant alert: Dining Room waterer offline"
-    message: "Dining Room waterer has lost connection ({{ state_attr('binary_sensor.dining_room_waterer_connection_lost', 'detail') }}). Still unresolved; this email repeats every 6 hours."
-    done_message: "Dining Room waterer connection restored."
-  kitchen_soil_sensor_connection_lost:
-    name: "Kitchen soil sensor connection lost"
-    entity_id: binary_sensor.kitchen_soil_sensor_connection_alert_email_gate
-    state: "on"
-    repeat: 360
-    skip_first: false
-    can_acknowledge: true
-    notifiers:
-      - email
-    title: "Plant alert: Kitchen soil sensor offline"
-    message: "Kitchen soil sensor has lost connection ({{ state_attr('binary_sensor.kitchen_soil_sensor_connection_lost', 'detail') }}). Still unresolved; this email repeats every 6 hours."
-    done_message: "Kitchen soil sensor connection restored."
-  kitchen_waterer_connection_lost:
-    name: "Kitchen waterer connection lost"
-    entity_id: binary_sensor.kitchen_waterer_connection_alert_email_gate
-    state: "on"
-    repeat: 360
-    skip_first: false
-    can_acknowledge: true
-    notifiers:
-      - email
-    title: "Plant alert: Kitchen waterer offline"
-    message: "Kitchen waterer has lost connection ({{ state_attr('binary_sensor.kitchen_waterer_connection_lost', 'detail') }}). Still unresolved; this email repeats every 6 hours."
-    done_message: "Kitchen waterer connection restored."
 
 automation:
   # ---- Startup grace for the contract sensor (see sensor.mirror_plant_alerts above) ----
@@ -645,17 +560,45 @@ automation:
           title: "Plant alert cleared: {{ label }}"
           message: "{{ label }} is back to normal."
 
-  # ---- Alert B email: once on raise, once on resolution ----
-  - id: mirror_plants_reservoir_email
-    alias: Mirror plants - reservoir empty email (once)
+  # ---- ALL emails: one automation, one notify_email_entity variable (notify.send_message) ----
+  #   conn_on  : a connection alert raised  -> digest of every offline device (skipped during startup grace)
+  #   digest   : 00:00/06:00/12:00/18:00    -> same digest, only if something is offline
+  #   conn_off : a connection alert cleared -> one "restored" email for that device
+  #   res_on / res_off : reservoir flag raised / cleared -> one email each (reservoir is NOT repeated)
+  - id: mirror_plants_email
+    alias: Mirror plants - emails (connection digest, restored, reservoir)
     description: >-
-      Sends one email when a zone's reservoir flag turns on and one when it clears.
-      (Connection-lost emails are handled by the alert: entities instead.)
+      Sends plant alert emails with notify.send_message to the notify entity in the variable
+      notify_email_entity. Connection-lost: a digest listing all offline devices when one raises and
+      every 6 hours (00:00, 06:00, 12:00, 18:00) while any is unrecovered, and a restored email per
+      device. Reservoir empty: one email on raise and one on clear. Muted by
+      input_boolean.mirror_plant_alerts_maintenance.
     mode: queued
-    max: 6
+    max: 12
     triggers:
       - trigger: state
-        id: raised
+        id: conn_on
+        entity_id:
+          - binary_sensor.family_room_soil_sensor_connection_lost
+          - binary_sensor.family_room_waterer_connection_lost
+          - binary_sensor.dining_room_soil_sensor_connection_lost
+          - binary_sensor.dining_room_waterer_connection_lost
+          - binary_sensor.kitchen_soil_sensor_connection_lost
+          - binary_sensor.kitchen_waterer_connection_lost
+        to: "on"
+      - trigger: state
+        id: conn_off
+        entity_id:
+          - binary_sensor.family_room_soil_sensor_connection_lost
+          - binary_sensor.family_room_waterer_connection_lost
+          - binary_sensor.dining_room_soil_sensor_connection_lost
+          - binary_sensor.dining_room_waterer_connection_lost
+          - binary_sensor.kitchen_soil_sensor_connection_lost
+          - binary_sensor.kitchen_waterer_connection_lost
+        from: "on"
+        to: "off"
+      - trigger: state
+        id: res_on
         entity_id:
           - binary_sensor.family_room_reservoir_empty_alert
           - binary_sensor.dining_room_reservoir_empty_alert
@@ -663,13 +606,18 @@ automation:
         from: "off"
         to: "on"
       - trigger: state
-        id: cleared
+        id: res_off
         entity_id:
           - binary_sensor.family_room_reservoir_empty_alert
           - binary_sensor.dining_room_reservoir_empty_alert
           - binary_sensor.kitchen_reservoir_empty_alert
         from: "on"
         to: "off"
+      - trigger: time_pattern
+        id: digest
+        hours: "/6"
+        minutes: 0
+        seconds: 0
     conditions:
       - condition: not
         conditions:
@@ -677,17 +625,69 @@ automation:
             entity_id: input_boolean.mirror_plant_alerts_maintenance
             state: "on"
     variables:
-      notify_email: notify.email   # PLACEHOLDER: OWNER MUST SET to the real email notify service
+      # ======================= the ONLY place the email recipient is set =======================
+      # Change via: Settings > Devices & services > SMTP > your recipient entry > its notify entity.
+      notify_email_entity: notify.email_harry_arter_gmail_com
+      # =====================================================================================
+      conn_ids: ['binary_sensor.family_room_soil_sensor_connection_lost', 'binary_sensor.family_room_waterer_connection_lost', 'binary_sensor.dining_room_soil_sensor_connection_lost', 'binary_sensor.dining_room_waterer_connection_lost', 'binary_sensor.kitchen_soil_sensor_connection_lost', 'binary_sensor.kitchen_waterer_connection_lost']
     actions:
       - variables:
-          alert_entity: "{{ trigger.entity_id }}"
-          label: "{{ state_attr(alert_entity, 'label') }}"
-      - action: "{{ notify_email }}"
-        data:
-          title: "{{ 'Plant alert: ' ~ label ~ ' may be empty' if trigger.id == 'raised' else 'Plant alert resolved: ' ~ label }}"
-          message: >-
-            {{ state_attr(alert_entity, 'detail') if trigger.id == 'raised'
-               else label ~ ' flag cleared (moisture rose or Refilled was pressed).' }}
+          n: >-
+            {{ expand(conn_ids) | selectattr('state', 'eq', 'on') | list | length }}
+          body: >-
+            {%- set ns = namespace(lines=[]) -%}
+            {%- for s in expand(conn_ids) | selectattr('state', 'eq', 'on') -%}
+              {%- set ns.lines = ns.lines + [ (s.attributes.get('symbol') | string) ~ ' ' ~ (s.attributes.get('label') | string) ~ ' - ' ~ (s.attributes.get('detail') | string) ~ ' (since ' ~ (s.last_changed | as_local).strftime('%b %d %H:%M') ~ ')' ] -%}
+            {%- endfor -%}
+            {{- ns.lines | join('\n') -}}
+          label: "{{ state_attr(trigger.entity_id, 'label') if trigger.entity_id is defined else '' }}"
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: >-
+                  {{ (trigger.id == 'conn_on' and not is_state('input_boolean.mirror_plant_startup_grace', 'on')
+                        and n | int(0) > 0)
+                       or (trigger.id == 'digest' and n | int(0) > 0) }}
+            sequence:
+              - action: notify.send_message
+                target:
+                  entity_id: "{{ notify_email_entity }}"
+                data:
+                  title: "Plant alert: {{ n }} device(s) offline"
+                  message: >-
+                    {{ body }}
+
+                    This digest repeats every 6 hours (00:00, 06:00, 12:00, 18:00) while any device is unrecovered.
+          - conditions:
+              - condition: template
+                value_template: "{{ trigger.id == 'conn_off' }}"
+            sequence:
+              - action: notify.send_message
+                target:
+                  entity_id: "{{ notify_email_entity }}"
+                data:
+                  title: "Plant alert resolved: {{ label }}"
+                  message: "{{ label }} connection restored."
+          - conditions:
+              - condition: template
+                value_template: "{{ trigger.id == 'res_on' }}"
+            sequence:
+              - action: notify.send_message
+                target:
+                  entity_id: "{{ notify_email_entity }}"
+                data:
+                  title: "Plant alert: {{ label }} may be empty"
+                  message: "{{ state_attr(trigger.entity_id, 'detail') }}"
+          - conditions:
+              - condition: template
+                value_template: "{{ trigger.id == 'res_off' }}"
+            sequence:
+              - action: notify.send_message
+                target:
+                  entity_id: "{{ notify_email_entity }}"
+                data:
+                  title: "Plant alert resolved: {{ label }}"
+                  message: "{{ label }} flag cleared (moisture rose or Refilled was pressed)."
 
   # ---- Alert B reset: moisture rise >= delta above the value at flag time, or Refilled button ----
   # The flag is SET by the paste-in snippet in plant-watering-stop-branch.md. It sets
@@ -804,8 +804,8 @@ automation:
 #         - input_boolean.kitchen_plant_reservoir_empty
 #         # ...plus your existing included entities
 #
-# Do NOT add the 9 helper binary_sensor.*_connection_lost / *_reservoir_empty_alert entities (or the
-# 6 *_email_gate sensors) to the include list.
+# Do NOT add the 9 helper binary_sensor.*_connection_lost / *_reservoir_empty_alert entities to the
+# include list.
 #
 # Recorder: HA's recorder cannot drop a single attribute from a template entity via YAML.
 # sensor.mirror_plant_alerts is rewritten whenever the attributes of an ACTIVE alert change, not

@@ -251,10 +251,10 @@ If the state is `unavailable`/`unknown`, the schema is wrong, the body is not va
 
 | Alert | Trigger | Mirror popup | Email | iPhone push |
 |---|---|---|---|---|
-| Connection lost (per soil sensor and per waterer, 6 devices) | Device stale or unavailable past the HA debounce (15 min raise, 10 min clear by default) | Yes | Immediately, then every 6 h while unresolved, plus a "done" email | Time-sensitive push, re-sent every 6 h, cleared on recovery |
+| Connection lost (per soil sensor and per waterer, 6 devices) | Device stale or unavailable past the HA debounce (15 min raise, 10 min clear by default) | Yes | A digest email on raise and at 00:00/06:00/12:00/18:00 while unrecovered, plus a "restored" email per device | Time-sensitive push, re-sent every 6 h, cleared on recovery |
 | Reservoir empty (per zone) | Your existing "no moisture increase" stop branch sets the zone's flag | Yes | Once, plus one resolved email | Same time-sensitive push |
 
-The flag clears when moisture rises past the value at flag time by the configured delta, or when you press the zone's "Refilled" button in HA. The exact thresholds, cadence and notify service names are in the package, which is the source of truth for the email and push behavior. The "reached max pulses" branch of your automation is not a reservoir alert.
+The flag clears when moisture rises past the value at flag time by the configured delta, or when you press the zone's "Refilled" button in HA. Email goes through `notify.send_message` to a notify entity (set once in the package). The exact thresholds, cadence and notify names are in the package, which is the source of truth for the email and push behavior. The "reached max pulses" branch of your automation is not a reservoir alert.
 
 ### Popup behavior
 
@@ -282,10 +282,10 @@ The flag clears when moisture rises past the value at flag time by the configure
 
 ### Limitations
 
-- iOS cannot make a notification un-dismissable. There is no sticky notification on iPhone. The package sends time-sensitive pushes (which can break through Focus modes) with a tag, re-sends them every 6 h and clears them on recovery, but a swiped-away push stays gone until the next cycle. The always-on reminders are the mirror popup and the 6-hourly email. Details in the HA README.
+- iOS cannot make a notification un-dismissable. There is no sticky notification on iPhone. The package sends time-sensitive pushes (which can break through Focus modes) with a tag, re-sends them every 6 h and clears them on recovery, but a swiped-away push stays gone until the next cycle. The always-on reminders are the mirror popup and the 6-hourly email digest. Details in the HA README.
 - Home Assistant tokens cannot be scoped to one entity. A non-admin user's token can still read every entity state over the REST API. The protection is the file permissions (`chmod 600`) and the fact that the token never leaves the Pi, not a narrow token.
 - If Home Assistant is down, nothing alerts. The email and push alerts are run by HA, and the mirror popup depends on polling HA. The mirror can only tell you that HA is not being monitored (the "not monitored" line after 10 min), and only when someone is looking at the mirror.
-- Phone pushes are re-sent at HA start and every 6 h on the clock (00:00, 06:00, 12:00, 18:00) for each active alert, so an HA restart or automation reload does not stop them. Email repeats every 360 minutes from the raise.
+- Phone pushes are re-sent at HA start and every 6 h on the clock (00:00, 06:00, 12:00, 18:00) for each active alert, so an HA restart or automation reload does not stop them. The email digest uses the same clock-aligned 6 h cadence and is not sent at HA start.
 - The popup depends on how MagicMirror's core `alert` module behaves, and that could not be checked off the Pi. The module assumes the 2.2x-2.3x behavior: `type: "alert"` popups are keyed by the sending module and stay until `HIDE_ALERT` when no `timer` is passed, `title`/`message` are rendered as HTML, and the overlay is attached to the page body so MMM-pages does not hide it. To avoid the uncertain parts the module never passes `timer` on an alert and sends `HIDE_ALERT` before every re-show. Run this once on the Pi:
 
   ```
