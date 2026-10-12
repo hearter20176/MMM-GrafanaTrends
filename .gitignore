@@ -3,3 +3,7 @@ __pycache__/
 # Your own entity IDs and the dashboard generated from them
 grafana/entities.json
 grafana/mirror-trends.dashboard.json
+
+# Home Assistant URL and token for plant alerts (server-side only; see ha-alerts.secret.example.json)
+*.secret.json
+*.secret

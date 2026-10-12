@@ -10,6 +10,13 @@ const MIN_RETRY_DELAY_MS = 5000;
 // Same idea for reloadInterval: a tiny value (or 0 meaning "never" is fine, but anything
 // smaller than this) would reload+probe on a near-continuous cycle.
 const MIN_RELOAD_INTERVAL_MS = 60 * 1000;
+// Plant alert option floors (see _clampPlantAlertConfig()).
+const MIN_PLANT_POLL_MS = 10 * 1000;
+const MIN_PLANT_TIMEOUT_MS = 2 * 1000;
+const MIN_PLANT_STALE_MS = 60 * 1000;
+const MIN_PLANT_POPUP_MS = 5 * 1000;
+const MIN_PLANT_REPEAT_MS = 60 * 1000;
+const PLANT_ENTITY_PATTERN = /^sensor\.[a-z0-9_]+$/;
 
 Module.register("MMM-GrafanaTrends", {
   defaults: {
@@ -42,11 +49,30 @@ Module.register("MMM-GrafanaTrends", {
     // at least 5s in start() so a misconfiguration (e.g. 0) can't hammer Grafana/the Pi with
     // a tight reload+probe loop.
     retryDelayMs: 60 * 1000,
-    maxRetryDelayMs: 10 * 60 * 1000
+    maxRetryDelayMs: 10 * 60 * 1000,
+    // iframe title attribute (accessibility); set it per instance when running two.
+    iframeTitle: "Grafana trends",
+    // Plant alerts: enable on ONE instance only (the node_helper rejects a second owner). The
+    // Home Assistant URL and token are read by the node_helper from ha-alerts.secret.json, never
+    // from this config (config.js is served to the browser).
+    plantAlertsEnabled: false,
+    plantAlertEntity: "sensor.mirror_plant_alerts",
+    plantAlertPollMs: 30 * 1000,
+    plantAlertTimeoutMs: 10 * 1000,
+    plantAlertStaleMs: 10 * 60 * 1000,
+    // How long each popup stays up (0 = until the alerts clear) and how often it is re-shown
+    // while alerts stay active (0 = never re-show).
+    plantAlertPopupMs: 2 * 60 * 1000,
+    plantAlertRepeatMs: 30 * 60 * 1000,
+    plantAlertRecoveryNotice: true
   },
 
   getStyles() {
     return ["MMM-GrafanaTrends.css"];
+  },
+
+  getScripts() {
+    return [this.file("plant-alert-popup.js")];
   },
 
   start() {
@@ -66,6 +92,199 @@ Module.register("MMM-GrafanaTrends", {
     if (this.config.reloadInterval > 0) {
       this.reloadTimer = setInterval(() => this._load(), this.config.reloadInterval);
     }
+
+    this.plantAlerts = null;
+    this.plantNoticeEl = null;
+    this.plantNoticeText = "";
+    this.plantLastSeq = 0;
+    this.plantWatchdog = null;
+    this.plantGrace = null;
+    this.plantResync = false;
+    this.plantLocalMonitor = false;
+    this.plantModel = { alerts: [], monitor: null };
+    if (this.config.plantAlertsEnabled === true) this._startPlantAlerts();
+  },
+
+  // Coerce the plant alert options in place (design.md section 4.1). Only called when plant
+  // alerts are enabled. The node_helper re-applies the timing clamps; it never trusts these.
+  _clampPlantAlertConfig() {
+    const c = this.config;
+    const d = this.defaults;
+
+    c.plantAlertEntity = typeof c.plantAlertEntity === "string" && PLANT_ENTITY_PATTERN.test(c.plantAlertEntity)
+      ? c.plantAlertEntity
+      : d.plantAlertEntity;
+
+    // null, undefined, "" and non-numeric values fall back to the default (never to 0). Only an
+    // explicit number 0 keeps its special meaning where one exists (popup/repeat).
+    const num = (value, fallback, min, allowZero) => {
+      if (allowZero && value === 0) return 0;
+      const blank = value === null || value === undefined || (typeof value === "string" && value.trim() === "");
+      return this._coerceDelayMs(blank ? fallback : value, fallback, min);
+    };
+    c.plantAlertPollMs = num(c.plantAlertPollMs, d.plantAlertPollMs, MIN_PLANT_POLL_MS, false);
+    c.plantAlertTimeoutMs = Math.min(
+      num(c.plantAlertTimeoutMs, d.plantAlertTimeoutMs, MIN_PLANT_TIMEOUT_MS, false),
+      c.plantAlertPollMs - 1000
+    );
+    c.plantAlertStaleMs = num(
+      c.plantAlertStaleMs,
+      d.plantAlertStaleMs,
+      Math.max(MIN_PLANT_STALE_MS, 2 * c.plantAlertPollMs),
+      false
+    );
+    c.plantAlertPopupMs = num(c.plantAlertPopupMs, d.plantAlertPopupMs, MIN_PLANT_POPUP_MS, true);
+    c.plantAlertRepeatMs = num(c.plantAlertRepeatMs, d.plantAlertRepeatMs, MIN_PLANT_REPEAT_MS, true);
+    c.plantAlertRecoveryNotice = c.plantAlertRecoveryNotice !== false;
+  },
+
+  // Liveness watchdog. The helper only emits STATE on change, so silence alone is normal. If none
+  // arrives for plantAlertStaleMs, re-send START (the helper treats a repeat START from the owner
+  // as a replay request, and recreates the poller if the helper process restarted). If that
+  // produces no reply within one poll period, show a local "not monitored" line. The watchdog
+  // re-arms at plantAlertStaleMs, so there is no tight loop.
+  _armPlantWatchdog() {
+    clearTimeout(this.plantWatchdog);
+    this.plantWatchdog = setTimeout(() => this._plantWatchdogFired(), this.config.plantAlertStaleMs);
+  },
+
+  _plantWatchdogFired() {
+    try {
+      if (!this.plantAlerts) return;
+      this.plantResync = true;
+      this._sendPlantStart();
+      clearTimeout(this.plantGrace);
+      this.plantGrace = setTimeout(() => this._plantGraceExpired(), this.config.plantAlertPollMs);
+      this._armPlantWatchdog();
+    } catch (err) {
+      Log.error(`[${this.name}] plant alert watchdog failed (${err && err.name})`);
+    }
+  },
+
+  _plantGraceExpired() {
+    try {
+      this.plantGrace = null;
+      if (!this.plantAlerts) return;
+      this.plantLocalMonitor = true;
+      this.plantAlerts.update({
+        alerts: this.plantModel.alerts,
+        monitor: { glyph: "!", reason: "helper not responding" }
+      });
+    } catch (err) {
+      Log.error(`[${this.name}] plant alert watchdog failed (${err && err.name})`);
+    }
+  },
+
+  _sendPlantStart() {
+    this.sendSocketNotification("GRAFANA_TRENDS_PLANT_ALERTS_START", {
+      identifier: this.identifier,
+      entity: this.config.plantAlertEntity,
+      pollMs: this.config.plantAlertPollMs,
+      timeoutMs: this.config.plantAlertTimeoutMs,
+      staleMs: this.config.plantAlertStaleMs
+    });
+  },
+
+  _startPlantAlerts() {
+    this._clampPlantAlertConfig();
+
+    if (this.config.haUrl || this.config.haTokenFile) {
+      // Values are deliberately not logged.
+      Log.warn(`[${this.name}] haUrl/haTokenFile are ignored; the Home Assistant URL and token are read from ha-alerts.secret.json`);
+    }
+
+    if (typeof GrafanaTrendsPlantAlertPopup === "undefined") {
+      Log.error(`[${this.name}] plant-alert-popup.js did not load; plant alerts are disabled`);
+      return;
+    }
+
+    this.plantAlerts = GrafanaTrendsPlantAlertPopup.createPopupController({
+      send: (notification, payload) => this._sendPlantPopup(notification, payload),
+      setTimer: (fn, ms) => setTimeout(fn, ms),
+      clearTimer: (t) => clearTimeout(t),
+      durationMs: this.config.plantAlertPopupMs,
+      repeatMs: this.config.plantAlertRepeatMs,
+      recoveryNotice: this.config.plantAlertRecoveryNotice
+    });
+
+    this._sendPlantStart();
+    this._armPlantWatchdog();
+  },
+
+  // The only place plant popups reach the core alert module. If the core alert behaviour on the
+  // device differs from the assumptions in plant-alert-popup.js, change this and
+  // buildShowAlertPayload() only.
+  _sendPlantPopup(notification, payload) {
+    this.sendNotification(notification, payload);
+  },
+
+  // State pushed by the node_helper (design.md section 3.1). Never throws.
+  _handlePlantAlertState(payload) {
+    try {
+      if (!this.plantAlerts || !payload || typeof payload !== "object") return;
+      if (payload.identifier !== this.identifier) return;
+      if (payload.status === "rejected") {
+        Log.warn(`[${this.name}] another MMM-GrafanaTrends instance owns plant alerts; this instance will not raise popups`);
+        this.plantAlerts.destroy();
+        this.plantAlerts = null;
+        clearTimeout(this.plantWatchdog);
+        clearTimeout(this.plantGrace);
+        this.plantWatchdog = null;
+        this.plantGrace = null;
+        return;
+      }
+      if (!Number.isFinite(payload.seq)) return;
+      // seq is strictly increasing per helper process. A lower seq is accepted only when the
+      // helper has evidently restarted: it says "starting", or it answers our watchdog re-START.
+      const restarted = payload.seq <= this.plantLastSeq && (payload.status === "starting" || this.plantResync);
+      if (payload.seq <= this.plantLastSeq && !restarted) return;
+      this.plantLastSeq = payload.seq;
+      this.plantResync = false;
+      this.plantLocalMonitor = false;
+      clearTimeout(this.plantGrace);
+      this.plantGrace = null;
+      this._armPlantWatchdog();
+
+      if (payload.status === "not_configured") {
+        this._setPlantNotice("Plant alerts disabled: create ha-alerts.secret.json (see README)");
+      } else if (payload.status === "auth_failed") {
+        this._setPlantNotice("Plant alerts stopped: Home Assistant rejected the token");
+      } else {
+        this._setPlantNotice("");
+      }
+
+      if (!Array.isArray(payload.alerts)) return;
+      const str = (v) => (v === null || v === undefined ? null : String(v));
+      const alerts = payload.alerts
+        .filter((a) => a && typeof a === "object")
+        .map((a) => ({
+          key: String(a.key),
+          zone: String(a.zone),
+          zoneName: String(a.zoneName),
+          glyph: String(a.glyph),
+          kind: String(a.kind),
+          device: str(a.device),
+          since: str(a.since),
+          detail: a.detail === null || a.detail === undefined ? "" : String(a.detail)
+        }));
+      const m = payload.monitor;
+      const monitor = m && typeof m === "object"
+        ? { glyph: String(m.glyph), reason: String(m.reason) }
+        : null;
+      this.plantModel = { alerts, monitor };
+      this.plantAlerts.update({ alerts, monitor });
+    } catch (err) {
+      Log.error(`[${this.name}] could not handle plant alert state (${err && err.name})`);
+    }
+  },
+
+  // textContent only, never innerHTML. The text is cached so a state that arrives before
+  // getDom() builds the element is still shown.
+  _setPlantNotice(text) {
+    this.plantNoticeText = text;
+    if (!this.plantNoticeEl) return;
+    this.plantNoticeEl.textContent = text;
+    this.plantNoticeEl.style.display = text ? "block" : "none";
   },
 
   // Floor retryDelayMs/maxRetryDelayMs/reloadInterval at a sane minimum so a config of 0
@@ -117,6 +336,10 @@ Module.register("MMM-GrafanaTrends", {
   // failures (blocked embedding, a redirect to login, a non-2xx status) that a same-origin
   // `load` event on the iframe cannot, because Chromium fires `load` for those pages too.
   socketNotificationReceived(notification, payload) {
+    if (notification === "GRAFANA_TRENDS_PLANT_ALERTS_STATE") {
+      this._handlePlantAlertState(payload);
+      return;
+    }
     if (notification !== "GRAFANA_TRENDS_PROBE_RESULT") return;
     if (!payload || payload.identifier !== this.identifier) return;
     // Ignore a reply for a _load() that's no longer the latest one (e.g. a slow probe
@@ -147,6 +370,15 @@ Module.register("MMM-GrafanaTrends", {
       card.appendChild(h);
     }
 
+    if (this.config.plantAlertsEnabled === true) {
+      const notice = document.createElement("div");
+      notice.className = "grafana-trends-alert-notice";
+      notice.style.display = "none";
+      card.appendChild(notice);
+      this.plantNoticeEl = notice;
+      if (this.plantNoticeText) this._setPlantNotice(this.plantNoticeText);
+    }
+
     if (!this.config.url) {
       const msg = document.createElement("div");
       msg.className = "grafana-trends-message";
@@ -161,7 +393,7 @@ Module.register("MMM-GrafanaTrends", {
     iframe.style.width = typeof this.config.width === "number" ? `${this.config.width}px` : this.config.width;
     iframe.style.height = typeof this.config.height === "number" ? `${this.config.height}px` : this.config.height;
     iframe.setAttribute("scrolling", "no");
-    iframe.setAttribute("title", "Grafana trends");
+    iframe.setAttribute("title", String(this.config.iframeTitle || "").trim() || this.defaults.iframeTitle);
     // `load` fires for blocked/redirected frames too (see socketNotificationReceived's
     // comment), so it only clears the hung-connection fallback timer here; the
     // node_helper probe result is what actually clears the error overlay/backoff.

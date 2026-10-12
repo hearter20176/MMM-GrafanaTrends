@@ -8,23 +8,104 @@
  * only the request's origin (protocol + host) is.
  */
 
+const fs = require("node:fs");
 const http = require("node:http");
 const https = require("node:https");
+const path = require("node:path");
 const Log = require("logger");
 const NodeHelper = require("node_helper");
 const { evaluateProbeResponse } = require("./probe-rules");
+const { PlantAlertPoller } = require("./plant-alert-poller");
+const { DEFAULT_ENTITY, sanitizeEntity, clampPlantAlertTimings } = require("./plant-alert-rules");
 
 const PROBE_TIMEOUT_MS = 10 * 1000;
 
 module.exports = NodeHelper.create({
   start() {
     Log.info(`[${this.name}] Node helper started.`);
+    this.plantOwner = null;
+    this.plantPoller = null;
+    this.plantSeq = 0;
+    this.plantRejectWarned = false;
+  },
+
+  stop() {
+    this.plantPoller?.stop();
   },
 
   socketNotificationReceived(notification, payload) {
     if (notification === "GRAFANA_TRENDS_PROBE") {
       this.probe(payload);
+    } else if (notification === "GRAFANA_TRENDS_PLANT_ALERTS_START") {
+      this.startPlantAlerts(payload);
     }
+  },
+
+  // The HA url and token are read from ha-alerts.secret.json by the poller, never from this
+  // payload, so nothing that arrives over the socket can redirect the token. The first
+  // identifier to START owns the poller; any other identifier is rejected.
+  startPlantAlerts(payload) {
+    const identifier = payload && typeof payload.identifier === "string" ? payload.identifier : "";
+    if (!identifier) return;
+
+    try {
+      if (this.plantOwner && this.plantOwner !== identifier) {
+        if (!this.plantRejectWarned) {
+          this.plantRejectWarned = true;
+          Log.warn(`[${this.name}] plant alerts: START from a second instance rejected`);
+        }
+        this.sendSocketNotification("GRAFANA_TRENDS_PLANT_ALERTS_STATE", {
+          identifier,
+          seq: 0,
+          status: "rejected",
+          alerts: [],
+          monitor: null
+        });
+        return;
+      }
+
+      if (this.plantOwner) {
+        // Same owner again (browser reload, second browser): replay, don't restart.
+        this.emitPlantState(identifier, this.plantPoller.getState());
+        return;
+      }
+
+      if (payload.entity !== undefined && sanitizeEntity(payload.entity) !== payload.entity) {
+        Log.warn(`[${this.name}] plant alerts: invalid entity id, using ${DEFAULT_ENTITY}`);
+      }
+      this.plantOwner = identifier;
+      this.plantPoller = new PlantAlertPoller({
+        http,
+        https,
+        fs,
+        now: () => Date.now(),
+        setTimeout: (fn, ms) => setTimeout(fn, ms),
+        clearTimeout: (timer) => clearTimeout(timer),
+        log: { info: (msg) => Log.info(msg), warn: (msg) => Log.warn(msg) },
+        secretPath: path.join(__dirname, "ha-alerts.secret.json"),
+        entity: sanitizeEntity(payload.entity),
+        timings: clampPlantAlertTimings(payload),
+        onState: (state) => this.emitPlantState(identifier, state)
+      });
+      this.plantPoller.start();
+    } catch (err) {
+      Log.warn(`[${this.name}] plant alerts: internal error (${err && err.name})`);
+      if (!this.plantPoller) this.plantOwner = null;
+      this.emitPlantState(identifier, { status: "degraded", alerts: [], monitor: null, checkedAt: null, lastGoodAt: null });
+    }
+  },
+
+  emitPlantState(identifier, state) {
+    this.plantSeq += 1;
+    this.sendSocketNotification("GRAFANA_TRENDS_PLANT_ALERTS_STATE", {
+      identifier,
+      seq: this.plantSeq,
+      status: state.status,
+      alerts: state.alerts,
+      monitor: state.monitor,
+      checkedAt: state.checkedAt,
+      lastGoodAt: state.lastGoodAt
+    });
   },
 
   probe(payload) {

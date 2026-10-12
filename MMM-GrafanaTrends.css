@@ -71,3 +71,113 @@ body.mm-day .grafana-trends-message-overlay {
   background: rgb(244 247 252 / 92%);
   color: var(--mm-text, #1d2738);
 }
+
+/* Plant alerts: "not monitored" notice at the bottom of the card.
+   Absolutely positioned so it never changes the card height; display is
+   controlled inline by the module script. Same fixed-scrim approach as the
+   message overlay, with a muted amber accent. */
+.grafana-trends-alert-notice {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 10px;
+  z-index: 2;
+  box-sizing: border-box;
+  padding: 6px 12px;
+  border-radius: 12px;
+  border: 1px solid rgb(224 178 92 / 45%);
+  background: rgb(8 12 24 / 88%);
+  backdrop-filter: blur(18px);
+  color: rgb(236 200 130 / 95%);
+  font-size: 0.75rem;
+  line-height: 1.35;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+body.mm-day .grafana-trends-alert-notice {
+  background: rgb(244 247 252 / 92%);
+  border-color: rgb(140 90 10 / 50%);
+  color: #6b4400;
+}
+
+/* Plant alerts: popup content rendered inside the core alert module. These
+   selectors are scoped to the module's own popup wrapper so nothing leaks
+   into other alerts. */
+.grafana-trends-popup {
+  display: block;
+  box-sizing: border-box;
+  max-width: 32em;
+  margin: 0 auto;
+  text-align: left;
+  font-size: 0.9em;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.grafana-trends-popup-line {
+  display: block;
+  margin: 0.35em 0;
+  padding-left: 1.8em;
+  text-indent: -1.8em;
+}
+
+.grafana-trends-popup-line:first-child {
+  margin-top: 0;
+}
+
+.grafana-trends-popup-line:last-child {
+  margin-bottom: 0;
+}
+
+/* Severity: a lost connection is stale data (dimmer weight, dashed rule);
+   an empty reservoir needs action (bolder, solid rule). Differences are
+   weight and line style as well as tint, so none is colour-only. */
+.grafana-trends-popup-connection_lost {
+  font-weight: 400;
+  border-left: 2px dashed rgb(224 178 92 / 55%);
+  padding-left: calc(1.8em + 0.5em);
+  text-indent: -1.8em;
+}
+
+.grafana-trends-popup-reservoir_empty {
+  font-weight: 700;
+  border-left: 3px solid rgb(232 140 110 / 80%);
+  padding-left: calc(1.8em + 0.5em);
+  text-indent: -1.8em;
+}
+
+/* Monitor line: dimmer and italic, no colour-only meaning. */
+.grafana-trends-popup-monitor {
+  font-style: italic;
+  font-weight: 400;
+  opacity: 0.8;
+  border-left: 2px dotted rgb(255 255 255 / 40%);
+  padding-left: calc(1.8em + 0.5em);
+  text-indent: -1.8em;
+}
+
+/* Glyph: force text presentation so U+25CF/25B2/25A0 never become colour emoji. */
+.grafana-trends-glyph {
+  display: inline-block;
+  min-width: 1.2em;
+  margin-right: 0.4em;
+  text-align: center;
+  text-indent: 0;
+  font-family: "DejaVu Sans", "Noto Sans Symbols 2", sans-serif;
+  font-variant-emoji: text;
+  font-weight: 400;
+  font-style: normal;
+}
+
+body.mm-day .grafana-trends-popup-connection_lost {
+  border-left-color: rgb(140 90 10 / 70%);
+}
+
+body.mm-day .grafana-trends-popup-reservoir_empty {
+  border-left-color: rgb(170 60 30 / 80%);
+}
+
+body.mm-day .grafana-trends-popup-monitor {
+  border-left-color: rgb(29 39 56 / 45%);
+}

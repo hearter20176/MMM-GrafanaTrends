@@ -1,0 +1,821 @@
+# =============================================================================
+# mirror_plants.yaml - Home Assistant package for MMM-GrafanaTrends plant alerts
+#
+# Install: copy to <config>/packages/mirror_plants.yaml (see README.md).
+# Nothing here edits your existing automations. The reservoir flags are set by a
+# short snippet you paste into your watering automations (plant-watering-stop-branch.md).
+#
+# What it provides
+#   - input_boolean.<zone>_plant_reservoir_empty    (x3, read by Grafana via InfluxDB "state")
+#   - input_button.<zone>_plant_reservoir_refilled  (x3)
+#   - Alert A, connection lost, per device (3 soil sensors, 3 waterers):
+#       binary_sensor.<zone>_<device>_connection_lost  (raise debounce 15 min, clear debounce 10 min)
+#       alert.* entities: email now, then every 360 min while unresolved, "done" email on recovery
+#       iPhone time-sensitive push, re-sent every 6 h, cleared with clear_notification on recovery
+#   - Alert B, reservoir likely empty, per zone: email once (+ one resolved email) and the same iPhone push
+#   - sensor.mirror_plant_alerts : the contract entity the mirror polls (schema 1)
+#
+# Tunable thresholds (the "variables"): the input_number helpers in the first block below.
+#   NOTE: each THRESHOLD helper has an `initial:` value that is re-applied on every HA restart. To
+#   change a threshold permanently, edit `initial:` here. UI edits last until the next restart.
+#   The three <zone>_plant_reservoir_flag_moisture helpers deliberately have NO `initial:`, so the
+#   stored baseline is restored across restarts.
+#
+# Minimum HA version: 2024.10 (plural triggers:/conditions:/actions: and trigger-based template
+# entities with triggers:). last_reported needs 2024.3 (falls back to last_updated before that).
+#
+# Notify services (the other "variables"):
+#   - Phone: notify.mobile_app_hea_iphone_14_pro_max (automation variable notify_phone)
+#   - Email: notify.email is a PLACEHOLDER. OWNER MUST SET IT in two places:
+#       (1) the `notifiers: [email]` list of every alert: entry (service name WITHOUT the notify. prefix)
+#       (2) the notify_email variable in the automation mirror_plants_reservoir_email
+#     (alert: only accepts a static notifier name, so it cannot read the automation variable.)
+#
+# Zone symbols. The mirror owns the glyph table (zones.js) and a test checks these markers
+# against it. Glyphs are written below as YAML \uXXXX escapes so this file stays ASCII.
+#@zone-symbol family_room U+25CF
+#@zone-symbol dining_room U+25B2
+#@zone-symbol kitchen U+25A0
+#
+# Entity-id status
+#   Verified (from the owner's dashboard queries and automations):
+#     sensor.soil_moisture_sensor_1_family_room_soil_moisture, switch.family_room_plant_waterer,
+#     sensor.soil_moisture_sensor_2_dining_room_soil_moisture, switch.plant_waterer_2,
+#     sensor.soil_moisture_sensor_3_kitchen_soil_moisture
+#   UNVERIFIED (inferred): switch.kitchen_plant_waterer,
+#     number.kitchen_plant_waterer_water_duration (not used in this file)
+#
+# Known limits (read before relying on it)
+#   - Soil sensors: lost = unavailable/unknown/missing OR no report for mirror_plant_soil_stale_min
+#     (last_reported, HA 2024.3+; falls back to last_updated). 0 disables the staleness part.
+#   - Waterers: AVAILABILITY ONLY by default (mirror_plant_waterer_stale_min = 0 = staleness off).
+#     Many switches only report when they change, and the Family Room waterer runs at most once a
+#     day, so a staleness limit would alarm constantly. Before turning staleness on, watch each
+#     waterer's last_reported for a day and set the limit well above what you saw (max 2880 min).
+#   - The Kitchen soil sensor is already "unavailable" in the owner's device dump, so expect a real
+#     Kitchen soil sensor alert about 15 min after install, then email + push every 6 h. Fix the sensor,
+#     or turn ON input_boolean.mirror_plant_alerts_maintenance before install to mute email and push
+#     (the mirror popup and the contract entity still show the alert).
+#   - Maintenance mode mutes email and iPhone push only. Turning it on while an email alert is open
+#     sends that alert's "restored" email once (the email gate sensor drops); turning it off re-raises.
+#   - Phone push cadence is clock-aligned (00:00, 06:00, 12:00, 18:00) plus on raise and at HA start,
+#     not 6 h from the raise. Email cadence (alert:) is 360 min from the raise.
+#   - Template reload (YAML reload of template entities) makes devices go unavailable briefly, which can
+#     send a spurious "restored" email followed by a new raise email 15 min later. Prefer a restart.
+#   - A shared outage (coordinator, Wi-Fi, cloud) takes all devices down at once: expect one email and
+#     one push per device. No combined alert is built, by decision.
+#   - Attribute exclusion: see the RECORDER / INFLUXDB note at the end of this file.
+#   - If HA itself is down nothing alerts; only an external watchdog can cover that.
+# =============================================================================
+
+input_number:
+  mirror_plant_soil_stale_min:
+    name: Mirror plants - soil sensor stale after (min, 0 = off)
+    min: 0
+    max: 2880
+    step: 5
+    initial: 180
+    mode: box
+    unit_of_measurement: min
+  mirror_plant_waterer_stale_min:
+    name: Mirror plants - waterer stale after (min, 0 = off)
+    min: 0
+    max: 2880
+    step: 5
+    initial: 0
+    mode: box
+    unit_of_measurement: min
+  mirror_plant_raise_delay_min:
+    name: Mirror plants - connection lost raise delay (min)
+    min: 1
+    max: 120
+    step: 1
+    initial: 15
+    mode: box
+    unit_of_measurement: min
+  mirror_plant_clear_delay_min:
+    name: Mirror plants - connection lost clear delay (min)
+    min: 1
+    max: 120
+    step: 1
+    initial: 10
+    mode: box
+    unit_of_measurement: min
+  mirror_plant_reservoir_clear_delta:
+    name: Mirror plants - moisture rise that clears reservoir flag (points)
+    min: 0.5
+    max: 20
+    step: 0.5
+    initial: 3
+    mode: box
+    unit_of_measurement: "%"
+
+
+  family_room_plant_reservoir_flag_moisture:
+    # No initial: on purpose, so the stored baseline is RESTORED across restarts.
+    name: Family Room moisture when reservoir flag was set
+    min: 0
+    max: 100
+    step: 0.1
+    mode: box
+    unit_of_measurement: "%"
+  dining_room_plant_reservoir_flag_moisture:
+    # No initial: on purpose, so the stored baseline is RESTORED across restarts.
+    name: Dining Room moisture when reservoir flag was set
+    min: 0
+    max: 100
+    step: 0.1
+    mode: box
+    unit_of_measurement: "%"
+  kitchen_plant_reservoir_flag_moisture:
+    # No initial: on purpose, so the stored baseline is RESTORED across restarts.
+    name: Kitchen moisture when reservoir flag was set
+    min: 0
+    max: 100
+    step: 0.1
+    mode: box
+    unit_of_measurement: "%"
+
+input_boolean:
+  mirror_plant_startup_grace:
+    name: Mirror plants - startup grace (internal, do not set by hand)
+    icon: mdi:timer-sand
+  mirror_plant_alerts_maintenance:
+    name: Mirror plants - maintenance (mute email and push)
+    icon: mdi:bell-off
+  family_room_plant_reservoir_empty:
+    name: Family Room plant reservoir empty
+    icon: mdi:water-off
+  dining_room_plant_reservoir_empty:
+    name: Dining Room plant reservoir empty
+    icon: mdi:water-off
+  kitchen_plant_reservoir_empty:
+    name: Kitchen plant reservoir empty
+    icon: mdi:water-off
+
+input_button:
+  family_room_plant_reservoir_refilled:
+    name: Family Room plant reservoir refilled
+    icon: mdi:water-plus
+  dining_room_plant_reservoir_refilled:
+    name: Dining Room plant reservoir refilled
+    icon: mdi:water-plus
+  kitchen_plant_reservoir_refilled:
+    name: Kitchen plant reservoir refilled
+    icon: mdi:water-plus
+
+template:
+  # ---- Alert A and B state sensors (one per device / per zone) ----
+  - binary_sensor:
+      # Family Room soil sensor: sensor.soil_moisture_sensor_1_family_room_soil_moisture
+      - name: "Family Room soil sensor connection lost"
+        unique_id: mirror_plants_family_room_soil_sensor_connection_lost
+        device_class: problem
+        delay_on: "{{ (states('input_number.mirror_plant_raise_delay_min') | float(15) * 60) | int }}"
+        delay_off: "{{ (states('input_number.mirror_plant_clear_delay_min') | float(10) * 60) | int }}"
+        state: >-
+          {% set s = states.sensor.soil_moisture_sensor_1_family_room_soil_moisture %}
+          {% set lim = (states('input_number.mirror_plant_soil_stale_min') | float(180)) * 60 %}
+          {{ s is none or s.state in ['unavailable', 'unknown']
+             or (lim > 0 and (now() - (s.last_reported or s.last_updated)).total_seconds() > lim) }}
+        attributes:
+          zone: family_room
+          zone_name: "Family Room"
+          symbol: "\u25CF"  # Family Room
+          kind: connection_lost
+          device: soil_sensor
+          label: "Family Room soil sensor"
+          tag: plant_family_room_soil_sensor_lost
+          detail: "{% set s = states.sensor.soil_moisture_sensor_1_family_room_soil_moisture %}{% if s is none %}entity not found{% elif s.state in ['unavailable', 'unknown'] %}reported {{ s.state }}{% else %}no report for {{ (((now() - (s.last_reported or s.last_updated)).total_seconds()) / 3600) | round(0) | int }} h{% endif %}"
+      # Family Room waterer: switch.family_room_plant_waterer
+      - name: "Family Room waterer connection lost"
+        unique_id: mirror_plants_family_room_waterer_connection_lost
+        device_class: problem
+        delay_on: "{{ (states('input_number.mirror_plant_raise_delay_min') | float(15) * 60) | int }}"
+        delay_off: "{{ (states('input_number.mirror_plant_clear_delay_min') | float(10) * 60) | int }}"
+        state: >-
+          {% set s = states.switch.family_room_plant_waterer %}
+          {% set lim = (states('input_number.mirror_plant_waterer_stale_min') | float(0)) * 60 %}
+          {{ s is none or s.state in ['unavailable', 'unknown']
+             or (lim > 0 and (now() - (s.last_reported or s.last_updated)).total_seconds() > lim) }}
+        attributes:
+          zone: family_room
+          zone_name: "Family Room"
+          symbol: "\u25CF"  # Family Room
+          kind: connection_lost
+          device: waterer
+          label: "Family Room waterer"
+          tag: plant_family_room_waterer_lost
+          detail: "{% set s = states.switch.family_room_plant_waterer %}{% if s is none %}entity not found{% elif s.state in ['unavailable', 'unknown'] %}reported {{ s.state }}{% else %}no report for {{ (((now() - (s.last_reported or s.last_updated)).total_seconds()) / 3600) | round(0) | int }} h{% endif %}"
+      # Family Room reservoir: mirrors input_boolean.family_room_plant_reservoir_empty
+      - name: "Family Room reservoir empty alert"
+        unique_id: mirror_plants_family_room_reservoir_empty_alert
+        device_class: problem
+        state: "{{ is_state('input_boolean.family_room_plant_reservoir_empty', 'on') }}"
+        attributes:
+          zone: family_room
+          zone_name: "Family Room"
+          symbol: "\u25CF"  # Family Room
+          kind: reservoir_empty
+          label: "Family Room reservoir"
+          tag: plant_family_room_reservoir
+          since: "{{ (states.input_boolean.family_room_plant_reservoir_empty.last_changed | as_local).isoformat() }}"
+          detail: "Watering stopped with no moisture rise (moisture {{ states('input_number.family_room_plant_reservoir_flag_moisture') }}% when flagged). Refill, then press Refilled."
+
+      # Dining Room soil sensor: sensor.soil_moisture_sensor_2_dining_room_soil_moisture
+      - name: "Dining Room soil sensor connection lost"
+        unique_id: mirror_plants_dining_room_soil_sensor_connection_lost
+        device_class: problem
+        delay_on: "{{ (states('input_number.mirror_plant_raise_delay_min') | float(15) * 60) | int }}"
+        delay_off: "{{ (states('input_number.mirror_plant_clear_delay_min') | float(10) * 60) | int }}"
+        state: >-
+          {% set s = states.sensor.soil_moisture_sensor_2_dining_room_soil_moisture %}
+          {% set lim = (states('input_number.mirror_plant_soil_stale_min') | float(180)) * 60 %}
+          {{ s is none or s.state in ['unavailable', 'unknown']
+             or (lim > 0 and (now() - (s.last_reported or s.last_updated)).total_seconds() > lim) }}
+        attributes:
+          zone: dining_room
+          zone_name: "Dining Room"
+          symbol: "\u25B2"  # Dining Room
+          kind: connection_lost
+          device: soil_sensor
+          label: "Dining Room soil sensor"
+          tag: plant_dining_room_soil_sensor_lost
+          detail: "{% set s = states.sensor.soil_moisture_sensor_2_dining_room_soil_moisture %}{% if s is none %}entity not found{% elif s.state in ['unavailable', 'unknown'] %}reported {{ s.state }}{% else %}no report for {{ (((now() - (s.last_reported or s.last_updated)).total_seconds()) / 3600) | round(0) | int }} h{% endif %}"
+      # Dining Room waterer: switch.plant_waterer_2
+      - name: "Dining Room waterer connection lost"
+        unique_id: mirror_plants_dining_room_waterer_connection_lost
+        device_class: problem
+        delay_on: "{{ (states('input_number.mirror_plant_raise_delay_min') | float(15) * 60) | int }}"
+        delay_off: "{{ (states('input_number.mirror_plant_clear_delay_min') | float(10) * 60) | int }}"
+        state: >-
+          {% set s = states.switch.plant_waterer_2 %}
+          {% set lim = (states('input_number.mirror_plant_waterer_stale_min') | float(0)) * 60 %}
+          {{ s is none or s.state in ['unavailable', 'unknown']
+             or (lim > 0 and (now() - (s.last_reported or s.last_updated)).total_seconds() > lim) }}
+        attributes:
+          zone: dining_room
+          zone_name: "Dining Room"
+          symbol: "\u25B2"  # Dining Room
+          kind: connection_lost
+          device: waterer
+          label: "Dining Room waterer"
+          tag: plant_dining_room_waterer_lost
+          detail: "{% set s = states.switch.plant_waterer_2 %}{% if s is none %}entity not found{% elif s.state in ['unavailable', 'unknown'] %}reported {{ s.state }}{% else %}no report for {{ (((now() - (s.last_reported or s.last_updated)).total_seconds()) / 3600) | round(0) | int }} h{% endif %}"
+      # Dining Room reservoir: mirrors input_boolean.dining_room_plant_reservoir_empty
+      - name: "Dining Room reservoir empty alert"
+        unique_id: mirror_plants_dining_room_reservoir_empty_alert
+        device_class: problem
+        state: "{{ is_state('input_boolean.dining_room_plant_reservoir_empty', 'on') }}"
+        attributes:
+          zone: dining_room
+          zone_name: "Dining Room"
+          symbol: "\u25B2"  # Dining Room
+          kind: reservoir_empty
+          label: "Dining Room reservoir"
+          tag: plant_dining_room_reservoir
+          since: "{{ (states.input_boolean.dining_room_plant_reservoir_empty.last_changed | as_local).isoformat() }}"
+          detail: "Watering stopped with no moisture rise (moisture {{ states('input_number.dining_room_plant_reservoir_flag_moisture') }}% when flagged). Refill, then press Refilled."
+
+      # Kitchen soil sensor: sensor.soil_moisture_sensor_3_kitchen_soil_moisture
+      - name: "Kitchen soil sensor connection lost"
+        unique_id: mirror_plants_kitchen_soil_sensor_connection_lost
+        device_class: problem
+        delay_on: "{{ (states('input_number.mirror_plant_raise_delay_min') | float(15) * 60) | int }}"
+        delay_off: "{{ (states('input_number.mirror_plant_clear_delay_min') | float(10) * 60) | int }}"
+        state: >-
+          {% set s = states.sensor.soil_moisture_sensor_3_kitchen_soil_moisture %}
+          {% set lim = (states('input_number.mirror_plant_soil_stale_min') | float(180)) * 60 %}
+          {{ s is none or s.state in ['unavailable', 'unknown']
+             or (lim > 0 and (now() - (s.last_reported or s.last_updated)).total_seconds() > lim) }}
+        attributes:
+          zone: kitchen
+          zone_name: "Kitchen"
+          symbol: "\u25A0"  # Kitchen
+          kind: connection_lost
+          device: soil_sensor
+          label: "Kitchen soil sensor"
+          tag: plant_kitchen_soil_sensor_lost
+          detail: "{% set s = states.sensor.soil_moisture_sensor_3_kitchen_soil_moisture %}{% if s is none %}entity not found{% elif s.state in ['unavailable', 'unknown'] %}reported {{ s.state }}{% else %}no report for {{ (((now() - (s.last_reported or s.last_updated)).total_seconds()) / 3600) | round(0) | int }} h{% endif %}"
+      # Kitchen waterer: switch.kitchen_plant_waterer
+      # UNVERIFIED: inferred entity id, confirm in Developer Tools > States before install. (Companion entity number.kitchen_plant_waterer_water_duration is also UNVERIFIED; this package does not use it, only the watering automation does.)
+      - name: "Kitchen waterer connection lost"
+        unique_id: mirror_plants_kitchen_waterer_connection_lost
+        device_class: problem
+        delay_on: "{{ (states('input_number.mirror_plant_raise_delay_min') | float(15) * 60) | int }}"
+        delay_off: "{{ (states('input_number.mirror_plant_clear_delay_min') | float(10) * 60) | int }}"
+        state: >-
+          {% set s = states.switch.kitchen_plant_waterer %}
+          {% set lim = (states('input_number.mirror_plant_waterer_stale_min') | float(0)) * 60 %}
+          {{ s is none or s.state in ['unavailable', 'unknown']
+             or (lim > 0 and (now() - (s.last_reported or s.last_updated)).total_seconds() > lim) }}
+        attributes:
+          zone: kitchen
+          zone_name: "Kitchen"
+          symbol: "\u25A0"  # Kitchen
+          kind: connection_lost
+          device: waterer
+          label: "Kitchen waterer"
+          tag: plant_kitchen_waterer_lost
+          detail: "{% set s = states.switch.kitchen_plant_waterer %}{% if s is none %}entity not found{% elif s.state in ['unavailable', 'unknown'] %}reported {{ s.state }}{% else %}no report for {{ (((now() - (s.last_reported or s.last_updated)).total_seconds()) / 3600) | round(0) | int }} h{% endif %}"
+      # Kitchen reservoir: mirrors input_boolean.kitchen_plant_reservoir_empty
+      - name: "Kitchen reservoir empty alert"
+        unique_id: mirror_plants_kitchen_reservoir_empty_alert
+        device_class: problem
+        state: "{{ is_state('input_boolean.kitchen_plant_reservoir_empty', 'on') }}"
+        attributes:
+          zone: kitchen
+          zone_name: "Kitchen"
+          symbol: "\u25A0"  # Kitchen
+          kind: reservoir_empty
+          label: "Kitchen reservoir"
+          tag: plant_kitchen_reservoir
+          since: "{{ (states.input_boolean.kitchen_plant_reservoir_empty.last_changed | as_local).isoformat() }}"
+          detail: "Watering stopped with no moisture rise (moisture {{ states('input_number.kitchen_plant_reservoir_flag_moisture') }}% when flagged). Refill, then press Refilled."
+
+      # ---- Email gates: raw connection-lost sensor AND maintenance off. The alert: entities watch these. ----
+      - name: "Family Room soil sensor connection alert email gate"
+        unique_id: mirror_plants_family_room_soil_sensor_connection_alert_email_gate
+        state: "{{ is_state('binary_sensor.family_room_soil_sensor_connection_lost', 'on') and not is_state('input_boolean.mirror_plant_alerts_maintenance', 'on') }}"
+      - name: "Family Room waterer connection alert email gate"
+        unique_id: mirror_plants_family_room_waterer_connection_alert_email_gate
+        state: "{{ is_state('binary_sensor.family_room_waterer_connection_lost', 'on') and not is_state('input_boolean.mirror_plant_alerts_maintenance', 'on') }}"
+      - name: "Dining Room soil sensor connection alert email gate"
+        unique_id: mirror_plants_dining_room_soil_sensor_connection_alert_email_gate
+        state: "{{ is_state('binary_sensor.dining_room_soil_sensor_connection_lost', 'on') and not is_state('input_boolean.mirror_plant_alerts_maintenance', 'on') }}"
+      - name: "Dining Room waterer connection alert email gate"
+        unique_id: mirror_plants_dining_room_waterer_connection_alert_email_gate
+        state: "{{ is_state('binary_sensor.dining_room_waterer_connection_lost', 'on') and not is_state('input_boolean.mirror_plant_alerts_maintenance', 'on') }}"
+      - name: "Kitchen soil sensor connection alert email gate"
+        unique_id: mirror_plants_kitchen_soil_sensor_connection_alert_email_gate
+        state: "{{ is_state('binary_sensor.kitchen_soil_sensor_connection_lost', 'on') and not is_state('input_boolean.mirror_plant_alerts_maintenance', 'on') }}"
+      - name: "Kitchen waterer connection alert email gate"
+        unique_id: mirror_plants_kitchen_waterer_connection_alert_email_gate
+        state: "{{ is_state('binary_sensor.kitchen_waterer_connection_lost', 'on') and not is_state('input_boolean.mirror_plant_alerts_maintenance', 'on') }}"
+
+  # ---- Contract entity read by the mirror (design section 2.2, schema 1) ----
+  # Trigger-based so the count and the list come from ONE evaluation (the `alerts` variable).
+  - triggers:
+      - trigger: state
+        entity_id:
+          - binary_sensor.family_room_soil_sensor_connection_lost
+          - binary_sensor.family_room_waterer_connection_lost
+          - binary_sensor.family_room_reservoir_empty_alert
+          - binary_sensor.dining_room_soil_sensor_connection_lost
+          - binary_sensor.dining_room_waterer_connection_lost
+          - binary_sensor.dining_room_reservoir_empty_alert
+          - binary_sensor.kitchen_soil_sensor_connection_lost
+          - binary_sensor.kitchen_waterer_connection_lost
+          - binary_sensor.kitchen_reservoir_empty_alert
+      - trigger: state
+        entity_id: input_boolean.mirror_plant_startup_grace
+      - trigger: homeassistant
+        event: start
+      - trigger: time_pattern
+        minutes: "/5"   # self-heal after a restart or a missed event
+    # Startup hold: for the raise-debounce period after HA start the connection-lost sensors restart
+    # their delay_on, so an ongoing alert would vanish and the mirror would announce a false all-clear.
+    # While input_boolean.mirror_plant_startup_grace is on, alerts from the previous value of this
+    # sensor are kept (merged with whatever is currently on). Same schema 1 either way.
+    # VERIFY after a restart that the previous alerts attribute is restored (see README).
+    variables:
+      current: >-
+        {%- set ids = [
+          'binary_sensor.family_room_soil_sensor_connection_lost',
+          'binary_sensor.family_room_waterer_connection_lost',
+          'binary_sensor.family_room_reservoir_empty_alert',
+          'binary_sensor.dining_room_soil_sensor_connection_lost',
+          'binary_sensor.dining_room_waterer_connection_lost',
+          'binary_sensor.dining_room_reservoir_empty_alert',
+          'binary_sensor.kitchen_soil_sensor_connection_lost',
+          'binary_sensor.kitchen_waterer_connection_lost',
+          'binary_sensor.kitchen_reservoir_empty_alert'
+        ] -%}
+        {%- set ns = namespace(items=[]) -%}
+        {%- for s in expand(ids) | selectattr('state', 'eq', 'on') -%}
+          {%- set a = s.attributes -%}
+          {%- set since = a.get('since') or (s.last_changed | as_local).isoformat() -%}
+          {%- set d = (a.get('detail') or '') | string | replace('<', '') | replace('>', '') -%}
+          {%- set ns.items = ns.items + [ {
+            'zone': a.get('zone'), 'symbol': a.get('symbol'), 'kind': a.get('kind'),
+            'device': a.get('device'), 'since': since, 'detail': d[:200] } ] -%}
+        {%- endfor -%}
+        {{- ns.items[:20] -}}
+      alerts: >-
+        {%- set prev = state_attr('sensor.mirror_plant_alerts', 'alerts') -%}
+        {%- if is_state('input_boolean.mirror_plant_startup_grace', 'on') and prev is iterable and prev is not string and prev is not mapping -%}
+          {%- set ns = namespace(items=current, keys=[]) -%}
+          {%- for c in current -%}
+            {%- set ns.keys = ns.keys + [ (c.zone | string) ~ ':' ~ (c.kind | string) ~ ':' ~ (c.device | string) ] -%}
+          {%- endfor -%}
+          {%- for p in prev if p is mapping -%}
+            {%- set k = (p.get('zone') | string) ~ ':' ~ (p.get('kind') | string) ~ ':' ~ (p.get('device') | string) -%}
+            {%- if k not in ns.keys -%}
+              {%- set ns.items = ns.items + [p] -%}
+              {%- set ns.keys = ns.keys + [k] -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{- ns.items[:20] -}}
+        {%- else -%}
+          {{- current -}}
+        {%- endif -%}
+    sensor:
+      - name: Mirror plant alerts
+        unique_id: mirror_plants_mirror_plant_alerts
+        unit_of_measurement: alerts
+        state: "{{ alerts | length }}"
+        attributes:
+          schema: 1
+          alerts: "{{ alerts }}"
+
+# ---- Email cadence for Alert A: HA alert integration, every 360 min while unresolved ----
+# notifiers: [email] means service notify.email. OWNER: change `email` to your notifier name.
+alert:
+  family_room_soil_sensor_connection_lost:
+    name: "Family Room soil sensor connection lost"
+    entity_id: binary_sensor.family_room_soil_sensor_connection_alert_email_gate
+    state: "on"
+    repeat: 360
+    skip_first: false
+    can_acknowledge: true
+    notifiers:
+      - email
+    title: "Plant alert: Family Room soil sensor offline"
+    message: "Family Room soil sensor has lost connection ({{ state_attr('binary_sensor.family_room_soil_sensor_connection_lost', 'detail') }}). Still unresolved; this email repeats every 6 hours."
+    done_message: "Family Room soil sensor connection restored."
+  family_room_waterer_connection_lost:
+    name: "Family Room waterer connection lost"
+    entity_id: binary_sensor.family_room_waterer_connection_alert_email_gate
+    state: "on"
+    repeat: 360
+    skip_first: false
+    can_acknowledge: true
+    notifiers:
+      - email
+    title: "Plant alert: Family Room waterer offline"
+    message: "Family Room waterer has lost connection ({{ state_attr('binary_sensor.family_room_waterer_connection_lost', 'detail') }}). Still unresolved; this email repeats every 6 hours."
+    done_message: "Family Room waterer connection restored."
+  dining_room_soil_sensor_connection_lost:
+    name: "Dining Room soil sensor connection lost"
+    entity_id: binary_sensor.dining_room_soil_sensor_connection_alert_email_gate
+    state: "on"
+    repeat: 360
+    skip_first: false
+    can_acknowledge: true
+    notifiers:
+      - email
+    title: "Plant alert: Dining Room soil sensor offline"
+    message: "Dining Room soil sensor has lost connection ({{ state_attr('binary_sensor.dining_room_soil_sensor_connection_lost', 'detail') }}). Still unresolved; this email repeats every 6 hours."
+    done_message: "Dining Room soil sensor connection restored."
+  dining_room_waterer_connection_lost:
+    name: "Dining Room waterer connection lost"
+    entity_id: binary_sensor.dining_room_waterer_connection_alert_email_gate
+    state: "on"
+    repeat: 360
+    skip_first: false
+    can_acknowledge: true
+    notifiers:
+      - email
+    title: "Plant alert: Dining Room waterer offline"
+    message: "Dining Room waterer has lost connection ({{ state_attr('binary_sensor.dining_room_waterer_connection_lost', 'detail') }}). Still unresolved; this email repeats every 6 hours."
+    done_message: "Dining Room waterer connection restored."
+  kitchen_soil_sensor_connection_lost:
+    name: "Kitchen soil sensor connection lost"
+    entity_id: binary_sensor.kitchen_soil_sensor_connection_alert_email_gate
+    state: "on"
+    repeat: 360
+    skip_first: false
+    can_acknowledge: true
+    notifiers:
+      - email
+    title: "Plant alert: Kitchen soil sensor offline"
+    message: "Kitchen soil sensor has lost connection ({{ state_attr('binary_sensor.kitchen_soil_sensor_connection_lost', 'detail') }}). Still unresolved; this email repeats every 6 hours."
+    done_message: "Kitchen soil sensor connection restored."
+  kitchen_waterer_connection_lost:
+    name: "Kitchen waterer connection lost"
+    entity_id: binary_sensor.kitchen_waterer_connection_alert_email_gate
+    state: "on"
+    repeat: 360
+    skip_first: false
+    can_acknowledge: true
+    notifiers:
+      - email
+    title: "Plant alert: Kitchen waterer offline"
+    message: "Kitchen waterer has lost connection ({{ state_attr('binary_sensor.kitchen_waterer_connection_lost', 'detail') }}). Still unresolved; this email repeats every 6 hours."
+    done_message: "Kitchen waterer connection restored."
+
+automation:
+  # ---- Startup grace for the contract sensor (see sensor.mirror_plant_alerts above) ----
+  - id: mirror_plants_startup_grace
+    alias: Mirror plants - startup grace (hold alerts after HA start)
+    description: >-
+      Turns on input_boolean.mirror_plant_startup_grace at HA start and off again after the
+      connection-lost raise delay plus 2 minutes, so ongoing alerts are not dropped from
+      sensor.mirror_plant_alerts while the debounce timers restart.
+    mode: restart
+    triggers:
+      - trigger: homeassistant
+        event: start
+    conditions: []
+    actions:
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.mirror_plant_startup_grace
+      - delay:
+          seconds: "{{ (((states('input_number.mirror_plant_raise_delay_min') | float(15)) + 2) * 60) | int }}"
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.mirror_plant_startup_grace
+
+  # Safety net: the hold must never stick. If the grace flag has been on for 30 min, turn it off.
+  - id: mirror_plants_startup_grace_watchdog
+    alias: Mirror plants - startup grace watchdog
+    description: Turns off a startup grace flag that has been on for more than 30 minutes.
+    mode: single
+    triggers:
+      - trigger: time_pattern
+        minutes: "/10"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.mirror_plant_startup_grace
+        state: "on"
+        for: "00:30:00"
+    actions:
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.mirror_plant_startup_grace
+
+
+  # ---- iPhone push: on raise, at HA start, and every 6 h (clock-aligned) for each alert that is on ----
+  # iOS cannot make a notification un-dismissable. This sends a time-sensitive push with a per-alert
+  # tag (a re-send replaces the previous one). There is no wait loop, so restarts and automation
+  # reloads cannot silently stop the re-sends; the next 6 h tick picks every active alert up again.
+  - id: mirror_plants_phone_push
+    alias: Mirror plants - iPhone time-sensitive push (raise, HA start, every 6 h)
+    description: >-
+      Pushes a time-sensitive notification for a plant alert when it turns on, and re-sends one
+      for every active alert at HA start and at 00:00, 06:00, 12:00 and 18:00. Muted by
+      input_boolean.mirror_plant_alerts_maintenance.
+    mode: queued
+    max: 12
+    triggers:
+      - trigger: state
+        id: alert_on
+        entity_id:
+          - binary_sensor.family_room_soil_sensor_connection_lost
+          - binary_sensor.family_room_waterer_connection_lost
+          - binary_sensor.family_room_reservoir_empty_alert
+          - binary_sensor.dining_room_soil_sensor_connection_lost
+          - binary_sensor.dining_room_waterer_connection_lost
+          - binary_sensor.dining_room_reservoir_empty_alert
+          - binary_sensor.kitchen_soil_sensor_connection_lost
+          - binary_sensor.kitchen_waterer_connection_lost
+          - binary_sensor.kitchen_reservoir_empty_alert
+        to: "on"
+      - trigger: homeassistant
+        id: resend
+        event: start
+      - trigger: time_pattern
+        id: resend
+        hours: "/6"
+        minutes: 0
+        seconds: 0
+    conditions:
+      - condition: not
+        conditions:
+          - condition: state
+            entity_id: input_boolean.mirror_plant_alerts_maintenance
+            state: "on"
+    variables:
+      notify_phone: notify.mobile_app_hea_iphone_14_pro_max
+    actions:
+      - variables:
+          targets: >-
+            {{ [trigger.entity_id] if trigger.id == 'alert_on'
+               else expand(['binary_sensor.family_room_soil_sensor_connection_lost', 'binary_sensor.family_room_waterer_connection_lost', 'binary_sensor.family_room_reservoir_empty_alert', 'binary_sensor.dining_room_soil_sensor_connection_lost', 'binary_sensor.dining_room_waterer_connection_lost', 'binary_sensor.dining_room_reservoir_empty_alert', 'binary_sensor.kitchen_soil_sensor_connection_lost', 'binary_sensor.kitchen_waterer_connection_lost', 'binary_sensor.kitchen_reservoir_empty_alert']) | selectattr('state', 'eq', 'on') | map(attribute='entity_id') | list }}
+      - repeat:
+          for_each: "{{ targets }}"
+          sequence:
+            - action: "{{ notify_phone }}"
+              data:
+                title: "{{ 'Reservoir may be empty' if state_attr(repeat.item, 'kind') == 'reservoir_empty' else 'Connection lost' }}: {{ state_attr(repeat.item, 'label') }}"
+                message: "{{ state_attr(repeat.item, 'detail') }} Re-sent every 6 hours until resolved."
+                data:
+                  tag: "{{ state_attr(repeat.item, 'tag') }}"
+                  push:
+                    interruption-level: time-sensitive
+
+  # ---- iPhone: clear the tagged notification on recovery, then a normal push ----
+  - id: mirror_plants_phone_clear
+    alias: Mirror plants - iPhone clear on recovery
+    description: >-
+      When a plant alert turns off, remove its tagged notification with clear_notification
+      and send a normal (non time-sensitive) recovery push.
+    mode: parallel
+    max: 12
+    triggers:
+      - trigger: state
+        entity_id:
+          - binary_sensor.family_room_soil_sensor_connection_lost
+          - binary_sensor.family_room_waterer_connection_lost
+          - binary_sensor.family_room_reservoir_empty_alert
+          - binary_sensor.dining_room_soil_sensor_connection_lost
+          - binary_sensor.dining_room_waterer_connection_lost
+          - binary_sensor.dining_room_reservoir_empty_alert
+          - binary_sensor.kitchen_soil_sensor_connection_lost
+          - binary_sensor.kitchen_waterer_connection_lost
+          - binary_sensor.kitchen_reservoir_empty_alert
+        from: "on"
+        to: "off"
+    conditions: []
+    variables:
+      notify_phone: notify.mobile_app_hea_iphone_14_pro_max
+    actions:
+      - variables:
+          alert_entity: "{{ trigger.entity_id }}"
+          label: "{{ state_attr(alert_entity, 'label') }}"
+          tag: "{{ state_attr(alert_entity, 'tag') }}"
+      - action: "{{ notify_phone }}"
+        data:
+          message: clear_notification
+          data:
+            tag: "{{ tag }}"
+      - action: "{{ notify_phone }}"
+        data:
+          title: "Plant alert cleared: {{ label }}"
+          message: "{{ label }} is back to normal."
+
+  # ---- Alert B email: once on raise, once on resolution ----
+  - id: mirror_plants_reservoir_email
+    alias: Mirror plants - reservoir empty email (once)
+    description: >-
+      Sends one email when a zone's reservoir flag turns on and one when it clears.
+      (Connection-lost emails are handled by the alert: entities instead.)
+    mode: queued
+    max: 6
+    triggers:
+      - trigger: state
+        id: raised
+        entity_id:
+          - binary_sensor.family_room_reservoir_empty_alert
+          - binary_sensor.dining_room_reservoir_empty_alert
+          - binary_sensor.kitchen_reservoir_empty_alert
+        from: "off"
+        to: "on"
+      - trigger: state
+        id: cleared
+        entity_id:
+          - binary_sensor.family_room_reservoir_empty_alert
+          - binary_sensor.dining_room_reservoir_empty_alert
+          - binary_sensor.kitchen_reservoir_empty_alert
+        from: "on"
+        to: "off"
+    conditions:
+      - condition: not
+        conditions:
+          - condition: state
+            entity_id: input_boolean.mirror_plant_alerts_maintenance
+            state: "on"
+    variables:
+      notify_email: notify.email   # PLACEHOLDER: OWNER MUST SET to the real email notify service
+    actions:
+      - variables:
+          alert_entity: "{{ trigger.entity_id }}"
+          label: "{{ state_attr(alert_entity, 'label') }}"
+      - action: "{{ notify_email }}"
+        data:
+          title: "{{ 'Plant alert: ' ~ label ~ ' may be empty' if trigger.id == 'raised' else 'Plant alert resolved: ' ~ label }}"
+          message: >-
+            {{ state_attr(alert_entity, 'detail') if trigger.id == 'raised'
+               else label ~ ' flag cleared (moisture rose or Refilled was pressed).' }}
+
+  # ---- Alert B reset: moisture rise >= delta above the value at flag time, or Refilled button ----
+  # The flag is SET by the paste-in snippet in plant-watering-stop-branch.md. It sets
+  # <zone>_plant_reservoir_flag_moisture FIRST, then turns the flag on (order matters here).
+  # Template triggers only fire on a false-to-true edge, so HA start and a /5 minute re-check
+  # cover rises that happened while HA was down or an automation was reloading.
+  - id: mirror_plants_reservoir_flag_clear
+    alias: Mirror plants - clear reservoir flag (moisture rise or Refilled)
+    description: >-
+      Clears input_boolean.<zone>_plant_reservoir_empty when the zone's soil moisture is at
+      least mirror_plant_reservoir_clear_delta points above the value stored when the flag was
+      set, or when the zone's Refilled button is pressed. Re-checked at HA start and every 5 min.
+    mode: queued
+    max: 10
+    triggers:
+      - trigger: template
+        id: rise_family_room
+        value_template: >-
+          {{ is_state('input_boolean.family_room_plant_reservoir_empty', 'on')
+             and is_number(states('sensor.soil_moisture_sensor_1_family_room_soil_moisture'))
+             and is_number(states('input_number.family_room_plant_reservoir_flag_moisture'))
+             and (states('sensor.soil_moisture_sensor_1_family_room_soil_moisture') | float) - (states('input_number.family_room_plant_reservoir_flag_moisture') | float)
+                 >= (states('input_number.mirror_plant_reservoir_clear_delta') | float(3)) }}
+      - trigger: state
+        id: btn_family_room
+        entity_id: input_button.family_room_plant_reservoir_refilled
+        not_from:
+          - unavailable
+          - unknown
+      - trigger: template
+        id: rise_dining_room
+        value_template: >-
+          {{ is_state('input_boolean.dining_room_plant_reservoir_empty', 'on')
+             and is_number(states('sensor.soil_moisture_sensor_2_dining_room_soil_moisture'))
+             and is_number(states('input_number.dining_room_plant_reservoir_flag_moisture'))
+             and (states('sensor.soil_moisture_sensor_2_dining_room_soil_moisture') | float) - (states('input_number.dining_room_plant_reservoir_flag_moisture') | float)
+                 >= (states('input_number.mirror_plant_reservoir_clear_delta') | float(3)) }}
+      - trigger: state
+        id: btn_dining_room
+        entity_id: input_button.dining_room_plant_reservoir_refilled
+        not_from:
+          - unavailable
+          - unknown
+      - trigger: template
+        id: rise_kitchen
+        value_template: >-
+          {{ is_state('input_boolean.kitchen_plant_reservoir_empty', 'on')
+             and is_number(states('sensor.soil_moisture_sensor_3_kitchen_soil_moisture'))
+             and is_number(states('input_number.kitchen_plant_reservoir_flag_moisture'))
+             and (states('sensor.soil_moisture_sensor_3_kitchen_soil_moisture') | float) - (states('input_number.kitchen_plant_reservoir_flag_moisture') | float)
+                 >= (states('input_number.mirror_plant_reservoir_clear_delta') | float(3)) }}
+      - trigger: state
+        id: btn_kitchen
+        entity_id: input_button.kitchen_plant_reservoir_refilled
+        not_from:
+          - unavailable
+          - unknown
+      - trigger: homeassistant
+        id: recheck
+        event: start
+      - trigger: time_pattern
+        id: recheck
+        minutes: "/5"
+    conditions: []
+    variables:
+      soil_map:
+
+        family_room: sensor.soil_moisture_sensor_1_family_room_soil_moisture
+        dining_room: sensor.soil_moisture_sensor_2_dining_room_soil_moisture
+        kitchen: sensor.soil_moisture_sensor_3_kitchen_soil_moisture
+    actions:
+      - variables:
+          by_button: "{{ trigger.id.startswith('btn_') }}"
+          zones: >-
+            {{ ['family_room', 'dining_room', 'kitchen'] if trigger.id == 'recheck'
+               else [trigger.id.split('_', 1)[1]] }}
+      - repeat:
+          for_each: "{{ zones }}"
+          sequence:
+            - if:
+                - condition: template
+                  value_template: >-
+                    {% set z = repeat.item %}
+                    {% set soil = states(soil_map[z]) %}
+                    {% set base = states('input_number.' ~ z ~ '_plant_reservoir_flag_moisture') %}
+                    {{ by_button
+                       or (is_state('input_boolean.' ~ z ~ '_plant_reservoir_empty', 'on')
+                           and is_number(soil) and is_number(base)
+                           and (soil | float) - (base | float)
+                               >= (states('input_number.mirror_plant_reservoir_clear_delta') | float(3))) }}
+              then:
+                - action: input_boolean.turn_off
+                  target:
+                    entity_id: "input_boolean.{{ repeat.item }}_plant_reservoir_empty"
+
+# =============================================================================
+# RECORDER / INFLUXDB note (attribute exclusion)
+#
+# The mirror reads the LIVE state over REST, so history is not needed for it to work.
+#
+# InfluxDB: ignore_attributes is a global list on the influxdb: integration, so add the two
+# attribute names this package uses. Put it in your configuration.yaml influxdb: block
+# (influxdb: cannot be safely merged from a package if you already define it):
+#
+#   influxdb:
+#     ignore_attributes:
+#       - alerts
+#       - schema
+#     include:
+#       entities:
+#         - sensor.mirror_plant_alerts
+#         - input_boolean.family_room_plant_reservoir_empty
+#         - input_boolean.dining_room_plant_reservoir_empty
+#         - input_boolean.kitchen_plant_reservoir_empty
+#         # ...plus your existing included entities
+#
+# Do NOT add the 9 helper binary_sensor.*_connection_lost / *_reservoir_empty_alert entities (or the
+# 6 *_email_gate sensors) to the include list.
+#
+# Recorder: HA's recorder cannot drop a single attribute from a template entity via YAML.
+# sensor.mirror_plant_alerts is rewritten whenever the attributes of an ACTIVE alert change, not
+# only when one is raised or cleared: a stale-sensor detail text changes about hourly, and nothing
+# changes for healthy devices. That is a handful of rows a day. If you still want it out of the
+# database, exclude the whole entity
+# (the mirror is unaffected):
+#
+#   recorder:
+#     exclude:
+#       entities:
+#         - sensor.mirror_plant_alerts
+# =============================================================================

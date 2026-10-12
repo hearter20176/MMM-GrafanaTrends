@@ -24,7 +24,8 @@ export default defineConfig([
         config: "readonly",
         moment: "readonly",
         lottie: "readonly",
-        SunCalc: "readonly"
+        SunCalc: "readonly",
+        GrafanaTrendsPlantAlertPopup: "readonly"
       }
     },
     rules: {
