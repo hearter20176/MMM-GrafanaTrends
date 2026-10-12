@@ -34,7 +34,7 @@ Files in this folder:
 
 Turn the maintenance switch OFF first, then for one zone:
 
-1. In Developer Tools > States, set `input_boolean.dining_room_plant_reservoir_empty` to on (use the Actions tab: `input_boolean.turn_on`).
+1. First set the zone's stored baseline to 100 so the auto-clear cannot fire: Developer Tools > Actions > `input_number.set_value`, target `input_number.dining_room_plant_reservoir_flag_moisture`, value `100`. This matters because the clear automation compares the current moisture with that baseline, and an untouched baseline (0) makes a hand-set flag look like a moisture rise, so it would clear itself within seconds. The real stop-branch snippet stores the baseline before it sets the flag. Then, on the same Actions tab, run `input_boolean.turn_on` on `input_boolean.dining_room_plant_reservoir_empty`.
 2. Confirm all three arrive: the reservoir email (one), the time-sensitive iPhone push, and the mirror popup (within one poll, 30 s by default). Confirm `sensor.mirror_plant_alerts` shows state `1` and one `reservoir_empty` alert.
 3. Press `input_button.dining_room_plant_reservoir_refilled`. Confirm the flag turns off, the resolved email arrives, the tagged push disappears and a recovery push arrives, and the popup clears.
 4. For a connection alert, you can switch off a soil sensor or waterer for 15 minutes or more, or temporarily lower `mirror_plant_raise_delay_min` to 1. Confirm the digest email (listing the device with its symbol and since time), push and popup, then restore it and confirm the "restored" email and cleared push after the 10 minute clear delay.
